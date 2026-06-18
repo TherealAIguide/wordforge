@@ -74,19 +74,19 @@ async function isValidWord(word) {
     return true;
   }
 }
-const S = {
-  bg: '#0d0f14',
-  surface: '#161a23',
-  surface2: '#1e2330',
-  border: '#2a3045',
-  amber: '#f5a623',
-  amberDim: '#c47d0e',
-  amberGlow: 'rgba(245,166,35,0.12)',
-  teal: '#3ecfb2',
-  red: '#e05a5a',
-  text: '#e8eaf0',
-  textDim: '#6e7a99'
+// ── ARENA THEMES ──
+const THEMES = {
+  ember: { name: 'Ember Forge', icon: '🔥', bg: '#0d0f14', surface: '#161a23', surface2: '#1e2330', border: '#2a3045', amber: '#f5a623', amberDim: '#c47d0e', amberGlow: 'rgba(245,166,35,0.12)', teal: '#3ecfb2', red: '#e05a5a', text: '#e8eaf0', textDim: '#6e7a99' },
+  neon: { name: 'Neon Arcade', icon: '🌆', bg: '#0a0014', surface: '#160a28', surface2: '#1f0f3a', border: '#3a1f5c', amber: '#ff2bd6', amberDim: '#b81ea0', amberGlow: 'rgba(255,43,214,0.15)', teal: '#19f4ff', red: '#ff4d6d', text: '#f1e8ff', textDim: '#8a7aad' },
+  royal: { name: 'Royal Court', icon: '👑', bg: '#1a1209', surface: '#2a1d10', surface2: '#3a2a16', border: '#5c4226', amber: '#d4af37', amberDim: '#9c7e26', amberGlow: 'rgba(212,175,55,0.15)', teal: '#7a9e7e', red: '#a83232', text: '#f3e9d2', textDim: '#a68a5c' },
+  space: { name: 'Deep Space', icon: '🪐', bg: '#070914', surface: '#10142a', surface2: '#171c3a', border: '#2a3262', amber: '#7c9bff', amberDim: '#5170c4', amberGlow: 'rgba(124,155,255,0.15)', teal: '#5ff0d7', red: '#ff5d8f', text: '#e6e9ff', textDim: '#6c74a8' },
+  terminal: { name: 'Retro Terminal', icon: '🖥️', bg: '#040a04', surface: '#0a160a', surface2: '#0f1f0f', border: '#1f4a1f', amber: '#39ff6a', amberDim: '#1f9a3f', amberGlow: 'rgba(57,255,106,0.15)', teal: '#39ff6a', red: '#ff4444', text: '#c8ffcf', textDim: '#4a8a4a' }
 };
+const THEME_ORDER = ['ember', 'neon', 'royal', 'space', 'terminal'];
+function applyTheme(key) {
+  Object.assign(S, THEMES[key] || THEMES.ember);
+}
+let S = { ...THEMES.ember };
 function wordScore(word) {
   return word.toUpperCase().split('').reduce((s, c) => s + (LV[c] || 0), 0);
 }
@@ -98,6 +98,174 @@ function canMakeWord(word, letters) {
     pool.splice(idx, 1);
   }
   return true;
+}
+
+// ── HIGH-SCORE / RARE-WORD POPUP ──
+const RARE_LETTERS = new Set(['Q', 'Z', 'X', 'J', 'K']);
+function wordTier(word, pts) {
+  const hasRareLetter = word.split('').some(ch => RARE_LETTERS.has(ch));
+  if (pts >= 20 || word.length >= 7 || hasRareLetter) {
+    return { level: 'legendary', label: 'LEGENDARY WORD', icon: '⚡' };
+  }
+  if (pts >= 13 || word.length >= 6) {
+    return { level: 'great', label: 'Great word!', icon: '🔥' };
+  }
+  if (pts >= 8) {
+    return { level: 'good', label: 'Nice forge!', icon: '✨' };
+  }
+  return null;
+}
+function WordPopup({
+  popup
+}) {
+  if (!popup) return null;
+  const {
+    word,
+    pts,
+    tier
+  } = popup;
+  const big = tier.level === 'legendary';
+  return /*#__PURE__*/React.createElement("div", {
+    style: {
+      position: 'fixed',
+      top: big ? '28%' : '16%',
+      left: '50%',
+      transform: 'translate(-50%, -50%)',
+      zIndex: 999,
+      pointerEvents: 'none',
+      textAlign: 'center',
+      animation: 'popIn 0.35s ease-out, popOut 0.3s ease-in 1.3s forwards'
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: big ? '1rem' : '0.8rem',
+      fontWeight: 700,
+      letterSpacing: '0.12em',
+      textTransform: 'uppercase',
+      color: tier.level === 'legendary' ? S.amber : tier.level === 'great' ? S.teal : S.text,
+      marginBottom: 4
+    }
+  }, tier.icon, " ", tier.label), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontFamily: "'Space Mono', monospace",
+      fontWeight: 700,
+      fontSize: big ? '2.6rem' : '1.8rem',
+      color: S.text
+    }
+  }, word, " ", /*#__PURE__*/React.createElement("span", {
+    style: {
+      color: S.amber
+    }
+  }, "+", pts)));
+}
+
+// ── ARENA PICKER ──
+function ArenaPicker({
+  themeKey,
+  onChange
+}) {
+  const idx = THEME_ORDER.indexOf(themeKey);
+  const theme = THEMES[themeKey];
+  function go(dir) {
+    const next = (idx + dir + THEME_ORDER.length) % THEME_ORDER.length;
+    onChange(THEME_ORDER[next]);
+  }
+  const arrowStyle = {
+    width: 30,
+    height: 30,
+    borderRadius: 7,
+    border: `1px solid ${theme.border}`,
+    background: 'transparent',
+    color: theme.textDim,
+    fontSize: '1.1rem',
+    cursor: 'pointer',
+    flexShrink: 0
+  };
+  return /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginBottom: 20,
+      textAlign: 'left'
+    }
+  }, /*#__PURE__*/React.createElement("label", {
+    style: {
+      display: 'block',
+      fontSize: '0.75rem',
+      fontWeight: 600,
+      color: S.textDim,
+      letterSpacing: '0.08em',
+      textTransform: 'uppercase',
+      marginBottom: 6
+    }
+  }, "Battle Arena"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 10,
+      background: theme.surface2,
+      border: `1.5px solid ${theme.border}`,
+      borderRadius: 10,
+      padding: '10px 12px',
+      transition: 'background 0.3s, border-color 0.3s'
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    onClick: () => go(-1),
+    style: arrowStyle
+  }, "‹"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      flex: 1,
+      textAlign: 'center'
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: '1.3rem',
+      marginBottom: 2
+    }
+  }, theme.icon), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontFamily: "'Space Grotesk', sans-serif",
+      fontWeight: 700,
+      fontSize: '0.85rem',
+      color: theme.text
+    }
+  }, theme.name), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      justifyContent: 'center',
+      gap: 4,
+      marginTop: 6
+    }
+  }, [theme.bg, theme.surface2, theme.amber, theme.teal].map((c, i) => /*#__PURE__*/React.createElement("span", {
+    key: i,
+    style: {
+      width: 14,
+      height: 14,
+      borderRadius: 4,
+      background: c,
+      border: `1px solid ${theme.border}`,
+      display: 'inline-block'
+    }
+  })))), /*#__PURE__*/React.createElement("button", {
+    onClick: () => go(1),
+    style: arrowStyle
+  }, "›")), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      justifyContent: 'center',
+      gap: 6,
+      marginTop: 8
+    }
+  }, THEME_ORDER.map(k => /*#__PURE__*/React.createElement("span", {
+    key: k,
+    onClick: () => onChange(k),
+    style: {
+      width: 7,
+      height: 7,
+      borderRadius: '50%',
+      cursor: 'pointer',
+      display: 'inline-block',
+      background: k === themeKey ? theme.amber : theme.border
+    }
+  }))));
 }
 
 // ── TILE ──
@@ -140,7 +308,9 @@ function Tile({
 
 // ── SETUP ──
 function SetupScreen({
-  onStart
+  onStart,
+  themeKey,
+  onThemeChange
 }) {
   const [phrase, setPhrase] = useState('');
   const [p1, setP1] = useState('');
@@ -263,7 +433,10 @@ function SetupScreen({
       color: S.textDim,
       lineHeight: 1.5
     }
-  }, "Player 1 goes first with a full timer, then Player 2 takes their turn. Any word Player 1 already found is locked out and scores zero for Player 2 — so finding words fast matters."))), [{
+  }, "Player 1 goes first with a full timer, then Player 2 takes their turn. Any word Player 1 already found is locked out and scores zero for Player 2 — so finding words fast matters."))), /*#__PURE__*/React.createElement(ArenaPicker, {
+    themeKey: themeKey,
+    onChange: onThemeChange
+  }), [{
     label: 'Source Word / Phrase',
     val: phrase,
     set: setPhrase,
@@ -507,6 +680,8 @@ function GameScreen({
     words: []
   }]);
   const [p1WordSet] = useState(new Set());
+  const [popup, setPopup] = useState(null);
+  const popupRef = useRef(null);
   const inputRef = useRef(null);
   const timerRef = useRef(null);
   const feedbackRef = useRef(null);
@@ -630,6 +805,16 @@ function GameScreen({
     });
     showFeedback(`"${word}" — +${pts} pts!`, 'ok');
     flash('ok');
+    const tier = wordTier(word, pts);
+    if (tier) {
+      setPopup({
+        word,
+        pts,
+        tier
+      });
+      clearTimeout(popupRef.current);
+      popupRef.current = setTimeout(() => setPopup(null), 1700);
+    }
   }
   function flash(type) {
     setInputState(type);
@@ -668,7 +853,9 @@ function GameScreen({
       width: '100%',
       maxWidth: 900
     }
-  }, mode === 'async' && /*#__PURE__*/React.createElement("div", {
+  }, /*#__PURE__*/React.createElement(WordPopup, {
+    popup: popup
+  }), mode === 'async' && /*#__PURE__*/React.createElement("div", {
     style: {
       display: 'inline-flex',
       alignItems: 'center',
@@ -1035,6 +1222,8 @@ function GameScreen({
         @keyframes shake { 0%,100%{transform:translateX(0)} 25%{transform:translateX(-5px)} 75%{transform:translateX(5px)} }
         @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.2} }
         @keyframes micPulse { from{box-shadow:0 0 0 0 rgba(245,166,35,0.4)} to{box-shadow:0 0 0 6px rgba(245,166,35,0)} }
+        @keyframes popIn { from { opacity:0; transform: translate(-50%,-50%) scale(0.7); } to { opacity:1; transform: translate(-50%,-50%) scale(1); } }
+        @keyframes popOut { from { opacity:1; } to { opacity:0; transform: translate(-50%,-62%) scale(0.92); } }
       `));
 }
 
@@ -1129,6 +1318,21 @@ function WordForge() {
   const [screen, setScreen] = useState('setup');
   const [config, setConfig] = useState(null);
   const [finalPlayers, setFinalPlayers] = useState(null);
+  const [themeKey, setThemeKey] = useState(() => {
+    try {
+      const saved = localStorage.getItem('wordforge_theme');
+      return saved && THEMES[saved] ? saved : 'ember';
+    } catch (e) {
+      return 'ember';
+    }
+  });
+  applyTheme(themeKey);
+  function changeTheme(key) {
+    setThemeKey(key);
+    try {
+      localStorage.setItem('wordforge_theme', key);
+    } catch (e) {}
+  }
   return /*#__PURE__*/React.createElement("div", {
     style: {
       background: S.bg,
@@ -1174,6 +1378,8 @@ function WordForge() {
       cursor: 'pointer'
     }
   }, "← New Game")), screen === 'setup' && /*#__PURE__*/React.createElement(SetupScreen, {
+    themeKey: themeKey,
+    onThemeChange: changeTheme,
     onStart: cfg => {
       setConfig(cfg);
       setScreen('game');
