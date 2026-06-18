@@ -1,0 +1,576 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>WordForge</title>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet" />
+<style>
+  html, body { margin: 0; padding: 0; background: #0d0f14; }
+  #root { min-height: 100vh; }
+</style>
+<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel" data-presets="react">
+const { useState, useEffect, useRef, useCallback } = React;
+
+// ── SCRABBLE VALUES ──
+const LV = {A:1,E:1,I:1,O:1,U:1,L:1,N:1,S:1,T:1,R:1,D:2,G:2,B:3,C:3,M:3,P:3,F:4,H:4,V:4,W:4,Y:4,K:5,J:8,X:8,Q:10,Z:10};
+
+// ── FALLBACK DICTIONARY (used while API loads or if it fails) ──
+const FALLBACK = new Set([
+  "AM","AN","AS","AT","AX","BE","BY","DO","EX","GO","HE","HI","IF","IN","IS","IT","ME","MY","NO","OF","OH","OK","ON","OR","OX","SO","TO","UP","US","WE",
+  "ACE","ACT","ADD","AGE","AGO","AID","AIM","AIR","ALL","AND","ANT","APE","APT","ARC","ARE","ARK","ARM","ART","ASH","ASK","ATE","AWE","AXE","BAD","BAG","BAN","BAR","BAT","BAY","BED","BIG","BIT","BOW","BOX","BOY","BUD","BUG","BUN","BUS","BUT","BUY","CAN","CAP","CAR","CAT","COP","COT","COW","CRY","CUB","CUP","CUT","DAD","DAM","DAY","DEN","DEW","DIG","DIM","DIP","DOC","DOG","DOT","DRY","DUE","DUG","DUN","DUO","EAR","EAT","EEL","EGG","ELM","EMU","END","ERA","EVE","EWE","EYE","FAD","FAN","FAR","FAT","FAX","FED","FEW","FIG","FIN","FIT","FIX","FLY","FOE","FOG","FOR","FUN","FUR","GAP","GAS","GEL","GEM","GET","GOD","GOT","GUM","GUN","GUT","GUY","HAD","HAM","HAS","HAT","HAY","HEM","HEN","HER","HIM","HIS","HIT","HOG","HOP","HOT","HOW","HUB","HUG","HUM","ICE","ILL","INN","ION","IRE","IRK","IVY","JAB","JAM","JAR","JAW","JAY","JET","JOB","JOG","JOT","JOY","JUG","JUT","KEG","KID","KIT","LAB","LAD","LAG","LAP","LAW","LAX","LAY","LEA","LED","LEG","LET","LID","LIE","LIT","LOG","LOT","LOW","MAD","MAN","MAP","MAR","MAT","MAW","MAY","MEN","MET","MID","MIX","MOB","MOD","MOM","MOP","MUD","MUG","NAB","NAG","NAP","NAY","NET","NEW","NIL","NIP","NIT","NOD","NOR","NOT","NOW","NUB","NUN","NUT","OAK","OAR","OAT","ODD","ODE","OFF","OFT","OIL","OLD","ONE","OPT","ORB","ORE","OWE","OWL","OWN","PAD","PAL","PAN","PAR","PAT","PAW","PAY","PEA","PEG","PEN","PEP","PET","PEW","PIE","PIG","PIN","PIT","PLY","POD","POP","POT","POW","PRY","PUB","PUG","PUN","PUP","PUT","RAG","RAM","RAN","RAP","RAT","RAW","RAY","RED","REF","RIB","RID","RIG","RIM","RIP","ROB","ROD","ROT","ROW","RUB","RUG","RUM","RUN","SAD","SAG","SAP","SAT","SAW","SAY","SEA","SET","SEW","SIT","SIX","SKI","SKY","SLY","SOB","SOD","SON","SOP","SOT","SOW","SOY","SPA","SPY","STY","SUB","SUM","SUN","SUP","TAB","TAD","TAN","TAP","TAR","TAX","TEA","TEN","TIE","TIN","TIP","TOE","TON","TOP","TOT","TOW","TOY","TUB","TUG","TUN","TWO","UGH","URN","USE","VAN","VAT","VET","VIA","VIE","VOW","WAD","WAR","WAS","WAX","WAY","WEB","WED","WEE","WET","WHO","WHY","WIN","WIT","WOE","WOK","WON","WOO","WOW","YAM","YAP","YAW","YEA","YEW","YON","ZAP","ZEN","ZIP","ZIT","ZOO",
+  "ABLE","ACHE","ACID","ACRE","AGED","AIDE","AKIN","ALLY","ALSO","ALTO","AMEN","AMID","APEX","ARCH","AREA","ARMS","ARMY","ARTS","ATOM","ATOP","AUTO","AVID","AWAY","AXES","AXLE","BABE","BACK","BAIL","BAIT","BAKE","BALD","BALE","BALL","BALM","BAND","BANE","BANK","BARE","BARK","BARN","BASE","BASH","BASK","BASS","BATH","BEAK","BEAM","BEAN","BEAR","BEAT","BEEF","BEEN","BEER","BEET","BELL","BELT","BEND","BEST","BITE","BLED","BLOW","BLUE","BLUR","BOAR","BOAT","BOIL","BOLD","BOLT","BOND","BONE","BOON","BORE","BORN","BOTH","BOUT","BREW","BROW","BUCK","BULL","BUMP","BURN","BUZZ","CAFE","CAGE","CAKE","CALF","CALL","CALM","CAME","CAMP","CANE","CAPE","CARE","CART","CASE","CASH","CAST","CAVE","CENT","CHIN","CHIP","CITE","COAL","COAT","CODE","COIL","COIN","COLD","COME","CONE","COOK","COOL","COPE","COPY","CORD","CORE","CORK","CORN","COST","COZY","CREW","CROP","CROW","CUBE","CUFF","CURL","CUTE","DAME","DARE","DARK","DART","DATA","DATE","DAWN","DAYS","DAZE","DEAD","DEAL","DEAN","DEAR","DEBT","DECK","DEED","DEEP","DEER","DEFT","DENY","DESK","DIAL","DIET","DIRE","DIRT","DISC","DISH","DISK","DIVE","DOCK","DOLE","DOME","DONE","DOOR","DOSE","DOVE","DOWN","DRAG","DRAW","DRIP","DROP","DRUM","DUAL","DUEL","DUMB","DUNE","DUSK","DUST","DUTY","EACH","EARL","EARN","EASE","EAST","EDGE","EMIT","ENVY","EPIC","EVEN","EVER","EVIL","EXAM","FACE","FACT","FADE","FAIL","FAIR","FAKE","FALL","FAME","FARE","FARM","FAST","FATE","FEAR","FEAT","FEEL","FEET","FELL","FELT","FERN","FILE","FILL","FILM","FIND","FINE","FIRE","FIRM","FISH","FIST","FLAG","FLED","FLOW","FOAM","FOIL","FOLK","FOND","FOOD","FOOL","FOOT","FORD","FORK","FORM","FORT","FOUL","FOUR","FREE","FUEL","FULL","FUND","FURY","GALE","GAME","GANG","GAZE","GIFT","GIRL","GIVE","GLAD","GLEE","GLOW","GLUE","GOAL","GOAT","GOLD","GONE","GOOD","GORE","GOWN","GRAM","GROW","GULF","GULL","GULP","GUST","HACK","HAIL","HAIR","HALE","HALF","HALL","HALO","HALT","HAND","HANG","HARD","HARE","HARM","HARP","HASH","HATE","HAUL","HAVE","HAWK","HAZE","HEAD","HEAL","HEAP","HEAR","HEAT","HEED","HEEL","HELP","HERB","HERD","HERE","HERO","HIDE","HIGH","HIKE","HILL","HINT","HIRE","HISS","HOAX","HOLE","HOME","HOOD","HOOK","HOPE","HORN","HOST","HOUR","HUGE","HULL","HUMP","HUNG","HUNT","HURL","HURT","ICON","IDEA","IDLE","INCH","INTO","IRON","JADE","JAIL","JEAN","JERK","JOIN","JOKE","JOLT","JUNK","JURY","JUST","KEEN","KEEP","KICK","KIND","KING","KNOT","KNOW","LACE","LACK","LAME","LAND","LANE","LARK","LASH","LAST","LATE","LAVA","LAWN","LAZY","LEAD","LEAF","LEAK","LEAN","LEAP","LEND","LENT","LESS","LICK","LIFE","LIFT","LIKE","LIMB","LIME","LIMP","LINE","LINK","LION","LIST","LIVE","LOAD","LOAF","LOAN","LOCK","LOFT","LONE","LONG","LOOK","LOOM","LOOP","LORE","LOSS","LOST","LOUD","LOVE","LUCK","LULL","LUNG","LURK","LUST","MADE","MAIL","MAIN","MAKE","MALE","MALL","MALT","MANY","MARK","MAST","MATE","MATH","MAZE","MEAL","MEAN","MEAT","MEET","MELT","MENU","MERE","MESH","MILE","MILK","MILL","MIND","MINE","MINT","MISS","MIST","MOAT","MOCK","MOLD","MOLE","MONK","MOOD","MOON","MOOR","MORE","MOST","MOTH","MOVE","MUCH","MUSE","MUSK","MUST","MUTE","MYTH","NAIL","NAME","NAPE","NAVY","NEAR","NEAT","NECK","NEED","NEST","NEWS","NEXT","NICE","NICK","NINE","NODE","NONE","NOON","NORM","NOSE","NOTE","NULL","OATH","ODDS","OMEN","ONCE","ONLY","OPEN","OVEN","OVER","PACE","PACK","PAGE","PAIN","PAIR","PALE","PALM","PARK","PART","PASS","PAST","PATH","PEAK","PEAR","PEEL","PEER","PELT","PEST","PICK","PILE","PILL","PINE","PIPE","POEM","POET","POLE","POND","POOL","POOR","PORE","PORK","PORT","POSE","POST","POUR","PROD","PROP","PULL","PULP","PUMP","PURE","PUSH","RACE","RAGE","RAID","RAIL","RAIN","RAKE","RANG","RANK","RARE","RASH","RATE","RAVE","READ","REAL","REAP","REAR","REEL","RELY","REND","RENT","REST","RICE","RICH","RIDE","RING","RIOT","RIPE","RISE","RISK","ROAM","ROAR","ROBE","ROCK","RODE","ROLE","ROLL","ROOF","ROOM","ROOT","ROPE","ROSE","RULE","RUNE","RUSH","RUST","SAGE","SAKE","SALE","SALT","SAME","SANE","SANG","SANK","SAVE","SEAL","SEAM","SEED","SEEK","SEEM","SEEP","SELF","SELL","SEND","SENT","SILK","SING","SINK","SITE","SIZE","SKIN","SLAB","SLAM","SLID","SLIM","SLIP","SLOT","SLOW","SLUG","SNAG","SNAP","SNIP","SNOW","SOAK","SOAP","SOAR","SOCK","SOFT","SOIL","SOLE","SOME","SONG","SOON","SORE","SORT","SOUL","SOUP","SOUR","SPIN","SPIT","SPOT","STAR","STAY","STEM","STEP","STEW","STIR","STOP","STUB","STUN","SUCH","SUIT","SUNG","SUNK","SURF","SWAN","SWAP","SWAY","TALE","TALK","TALL","TAME","TANG","TART","TASK","TEAR","TEAL","TELL","TEND","TENT","TERM","TEST","THAN","THAT","THEM","THEN","THEY","THIN","THIS","TIDE","TIME","TINY","TIRE","TOAD","TOLL","TONE","TOOK","TOOL","TORN","TOSS","TOUR","TOWN","TRAP","TRAY","TREE","TRIM","TRIO","TRIP","TROD","TROT","TRUE","TUBE","TUCK","TUNA","TUNE","TURF","TURN","UGLY","UNDO","UNIT","UPON","URGE","USER","VALE","VANE","VARY","VAST","VEIL","VEIN","VERB","VERY","VEST","VETO","VICE","VILE","VINE","VOID","VOLT","VOTE","WADE","WAGE","WAIL","WAIT","WAKE","WALK","WALL","WAND","WANE","WARD","WARE","WARM","WARN","WAVE","WEAK","WEAR","WEED","WEEK","WELD","WELL","WENT","WERE","WEST","WIDE","WIFE","WILD","WILL","WIND","WINE","WING","WINK","WIRE","WISE","WISH","WITH","WOLF","WOOD","WOOL","WORD","WORE","WORK","WORM","WORN","YARD","YARN","YEAR","YELL","YOGA","YOUR","ZEAL","ZERO","ZEST","ZONE","ZOOM",
+  "ABOUT","ABOVE","ACORN","ACUTE","ADMIT","ADOPT","ADULT","AFTER","AGAIN","AGENT","AGONY","AGREE","AHEAD","AISLE","ALARM","ALBUM","ALERT","ALIKE","ALIVE","ALLEY","ALLOW","ALONE","ALONG","ALTER","ANGEL","ANGER","ANGLE","ANNEX","APART","APPLE","APPLY","APRON","ARENA","ARGUE","ARISE","ARRAY","ARROW","ATLAS","ATTIC","AUDIO","AUDIT","AVOID","BADGE","BASIC","BASIN","BEACH","BEARD","BEAST","BEGIN","BEING","BELOW","BENCH","BIRTH","BLACK","BLADE","BLAME","BLANK","BLAST","BLAZE","BLEND","BLESS","BLIND","BLOCK","BLOOD","BLOOM","BOARD","BONUS","BOOST","BRACE","BRAIN","BRAND","BRAVE","BREAK","BREED","BRICK","BRIDE","BRIEF","BRING","BROAD","BROOM","BROWN","BRUSH","BRUTE","BUILD","BUILT","BUNCH","BURST","CABIN","CANDY","CARGO","CARVE","CEDAR","CHAIN","CHAIR","CHALK","CHARM","CHART","CHASE","CHEAP","CHEAT","CHECK","CHEEK","CHEER","CHESS","CHEST","CHIEF","CHILD","CHOIR","CHUNK","CIVIC","CIVIL","CLAIM","CLASS","CLEAN","CLEAR","CLERK","CLICK","CLIFF","CLING","CLOCK","CLONE","CLOSE","CLOTH","CLOUD","CLOWN","COACH","COAST","COLOR","COMIC","COMET","CORAL","COULD","COUNT","COURT","COVER","CRAFT","CRASH","CRAZY","CREAM","CREEK","CRIME","CRISP","CROSS","CROWD","CROWN","CRUEL","CRUSH","CURVE","CYCLE","DAILY","DANCE","DEATH","DEBUT","DECOR","DELAY","DELTA","DENSE","DEPOT","DEPTH","DETER","DEVIL","DIARY","DIRTY","DISCO","DIVER","DIZZY","DODGE","DOUBT","DOUGH","DRAFT","DRAIN","DRAMA","DRAPE","DREAM","DRESS","DRILL","DRINK","DRIVE","DROVE","DROWN","DRUNK","DYING","EAGLE","EARLY","EARTH","EIGHT","EJECT","ELITE","EMBER","EMPTY","ENEMY","ENJOY","ENTER","ENTRY","ENVOY","EQUAL","ERROR","ESSAY","EVADE","EVENT","EVERY","EXACT","EXTRA","FABLE","FAIRY","FAITH","FALSE","FANCY","FATAL","FAULT","FEAST","FETCH","FEVER","FIBER","FIELD","FIFTH","FIFTY","FIGHT","FINAL","FIRST","FLAME","FLASK","FLASH","FLEET","FLESH","FLOAT","FLOOD","FLOOR","FLORA","FLOUR","FLUID","FLUTE","FOCAL","FORCE","FORGE","FOUND","FRAME","FRANK","FRAUD","FRESH","FRONT","FROWN","FULLY","FUNNY","FUZZY","GENRE","GHOST","GIANT","GIVEN","GLOBE","GLOOM","GLORY","GLOSS","GLOVE","GOING","GRACE","GRADE","GRAIN","GRAND","GRANT","GRAPH","GRASP","GRASS","GRAVE","GREAT","GREED","GREEN","GRIEF","GRILL","GROAN","GROVE","GROWL","GRUNT","GUARD","GUESS","GUEST","GUIDE","GUILD","GUILT","GUSTO","HABIT","HAPPY","HARSH","HEART","HEAVY","HEDGE","HENCE","HINGE","HOBBY","HOLLY","HONEY","HONOR","HORSE","HOTEL","HOUND","HUMAN","HUMOR","HURRY","IDEAL","IMAGE","IMPLY","INDEX","INDIE","INFER","INNER","INPUT","IRONY","JEWEL","JUDGE","JUICE","KARMA","KNIFE","KNOCK","KNOWN","LABEL","LANCE","LARGE","LASER","LATER","LAUGH","LAYER","LEARN","LEAVE","LEDGE","LEGAL","LEMON","LEVEL","LIGHT","LIMIT","LINEN","LIVER","LOCAL","LOGIC","LOOSE","LOVER","LOWER","LUCID","LUNAR","LYRIC","MAGIC","MAJOR","MAKER","MANOR","MAPLE","MARCH","MARRY","MATCH","MAYOR","MEDIA","MERCY","MERIT","MICRO","MIGHT","MINOR","MINUS","MIXED","MODEL","MONEY","MONTH","MOODY","MORAL","MOUSE","MOUTH","MOVIE","MURKY","MUSIC","NAIVE","NAVAL","NICHE","NIGHT","NOBLE","NOISE","NORTH","NOTED","NOVEL","NURSE","OCCUR","OCEAN","OFFER","OFTEN","OLIVE","ORDER","OTHER","OUTER","OZONE","PAINT","PANIC","PAPER","PATCH","PAUSE","PEACE","PEARL","PENAL","PETTY","PHASE","PHONE","PHOTO","PIANO","PIECE","PILOT","PITCH","PIXEL","PLACE","PLAIN","PLANE","PLANT","PLATE","PLAZA","PLEAD","PLUME","POINT","POKER","POLAR","POWER","PRESS","PRICE","PRIDE","PRIME","PRINT","PRIOR","PRIZE","PROBE","PRONE","PROOF","PROSE","PROUD","PROVE","PROWL","PUNCH","PUPIL","PURSE","QUERY","QUEUE","QUICK","QUIET","QUOTA","QUOTE","RABBI","RADAR","RADIO","RAINY","RAISE","RALLY","RANCH","RANGE","RAPID","RAVEN","REACH","READY","REALM","REBEL","REFER","REIGN","RELAX","RELAY","RENEW","REPAY","REPLY","RISKY","RIVAL","RIVER","ROBOT","ROCKY","ROUGE","ROUGH","ROUND","ROUTE","ROYAL","RUGBY","RULER","RURAL","SADLY","SAINT","SALAD","SALON","SANDY","SAUCE","SCARY","SCENE","SCOUT","SCREW","SENSE","SERVE","SEVEN","SHADE","SHAFT","SHALL","SHAME","SHAPE","SHARE","SHARP","SHEER","SHEET","SHELF","SHELL","SHIFT","SHINE","SHIRT","SHOCK","SHORE","SHORT","SIGHT","SINCE","SIXTH","SIXTY","SKILL","SKULL","SLATE","SLAVE","SLEEP","SLIDE","SLOPE","SMART","SMELL","SMILE","SMOKE","SNAKE","SOLAR","SOLID","SOLVE","SORRY","SOUTH","SPACE","SPARE","SPARK","SPEAR","SPEED","SPEND","SPENT","SPILL","SPOKE","SPORT","SPRAY","STACK","STAFF","STAGE","STAIN","STAIR","STAKE","STALE","STALL","STAMP","STAND","STARK","START","STATE","STEAL","STEAM","STEEL","STEEP","STEER","STICK","STIFF","STILL","STOCK","STONE","STOOD","STORE","STORM","STORY","STOVE","STRAP","STRAW","STRIP","STUDY","STYLE","SUGAR","SUITE","SUNNY","SUPER","SURGE","SWAMP","SWEET","SWIPE","TABLE","TASTE","TEACH","TEMPO","TENSE","TENTH","TERMS","THORN","THREE","THROW","TIGER","TIGHT","TIRED","TITLE","TOAST","TOKEN","TORCH","TOTAL","TOUCH","TOUGH","TOWEL","TOWER","TOXIC","TRACE","TRACK","TRADE","TRAIL","TRAIN","TRAIT","TRASH","TRIAL","TRIBE","TRICK","TROOP","TROVE","TRUCE","TRULY","TRUNK","TRUST","TRUTH","TWICE","TWIST","UMBRA","UNCUT","UNDER","UNIFY","UNION","UNITE","UNITY","UNTIL","UPPER","UPSET","URBAN","USAGE","USHER","VALID","VALOR","VALUE","VALVE","VAPOR","VAULT","VERSE","VIDEO","VIGOR","VIRAL","VIRUS","VISIT","VISTA","VITAL","VIVID","VOICE","VOTER","WAGER","WASTE","WATCH","WATER","WEARY","WEAVE","WEDGE","WEIRD","WHALE","WHEAT","WHEEL","WHERE","WHICH","WHILE","WHITE","WHOLE","WHOSE","WIDTH","WITTY","WOMAN","WOMEN","WORLD","WORRY","WORSE","WORST","WORTH","WOULD","WRATH","WRITE","WROTE","YACHT","YIELD","YOUNG","YOUTH","ZESTY","ZIPPY",
+  // Extra common words often flagged as missing
+  "RATION","NATION","RATIO","TRAIN","RAIN","RAINS","TRAINS","RANT","RANTS","ANTI","NARC","NARCO","TARN","ARCO","NARC","INTRO","NITRO","INRO","IRON","IRONS","NOIR","NORM","NORI","RANI","TORN","CORN","HORN","BORN","WORN","MORN","LORN","FORA","HORA","TORA","FANO","INIA","INTRA","ANNO","ANION","ONION","MANOR","MINOR","MANOR","TRAIN","MAIN","RAIN","ROAN","LOAN","MOAN","GROAN","TORC","SORT","TORT","TORS","RORT","SNORT","SHORT","SPORT","FORT","ORTS","DROIT","GRIOT","RIOT","TRIO"
+]);
+
+// ── LIVE DICTIONARY CHECK via Free Dictionary API ──
+const dictCache = new Map();
+async function isValidWord(word) {
+  const w = word.toUpperCase();
+  if (FALLBACK.has(w)) return true;
+  if (dictCache.has(w)) return dictCache.get(w);
+  try {
+    const res = await fetch(`https://api.dictionaryapi.dev/api/v2/entries/en/${word.toLowerCase()}`);
+    const valid = res.ok;
+    dictCache.set(w, valid);
+    return valid;
+  } catch {
+    // Offline fallback — trust the word if it looks reasonable
+    dictCache.set(w, true);
+    return true;
+  }
+}
+
+const S = {
+  bg: '#0d0f14', surface: '#161a23', surface2: '#1e2330', border: '#2a3045',
+  amber: '#f5a623', amberDim: '#c47d0e', amberGlow: 'rgba(245,166,35,0.12)',
+  teal: '#3ecfb2', red: '#e05a5a', text: '#e8eaf0', textDim: '#6e7a99',
+};
+
+function wordScore(word) {
+  return word.toUpperCase().split('').reduce((s, c) => s + (LV[c] || 0), 0);
+}
+
+function canMakeWord(word, letters) {
+  const pool = [...letters];
+  for (const ch of word.toUpperCase()) {
+    const idx = pool.indexOf(ch);
+    if (idx === -1) return false;
+    pool.splice(idx, 1);
+  }
+  return true;
+}
+
+// ── TILE ──
+function Tile({ ch, idx, visible }) {
+  return (
+    <div style={{
+      fontFamily: "'Space Mono', monospace", fontSize: '1.2rem', fontWeight: 700,
+      width: 44, height: 44, borderRadius: 8,
+      border: `1.5px solid ${S.border}`, background: S.surface2,
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+      color: S.text, position: 'relative',
+      opacity: visible ? 1 : 0, transform: visible ? 'translateY(0)' : 'translateY(-10px)',
+      transition: `opacity 0.3s ${idx * 55}ms, transform 0.3s ${idx * 55}ms`,
+      flexShrink: 0,
+    }}>
+      {ch}
+      <span style={{ position: 'absolute', bottom: 2, right: 4, fontSize: '0.5rem', color: S.textDim, fontFamily: "'Space Mono', monospace" }}>
+        {LV[ch] || 0}
+      </span>
+    </div>
+  );
+}
+
+// ── SETUP ──
+function SetupScreen({ onStart }) {
+  const [phrase, setPhrase] = useState('');
+  const [p1, setP1] = useState('');
+  const [p2, setP2] = useState('');
+  const [time, setTime] = useState('120');
+  const [mode, setMode] = useState('sync');
+  const [err, setErr] = useState('');
+
+  function start() {
+    const clean = phrase.trim().toUpperCase();
+    if (!clean || clean.replace(/\s/g, '').length < 3) {
+      setErr('Please enter a word or phrase with at least 3 letters.'); return;
+    }
+    setErr('');
+    onStart({ phrase: clean, p1Name: p1.trim() || 'Player 1', p2Name: p2.trim() || 'Player 2', totalSecs: parseInt(time), mode });
+  }
+
+  const inputStyle = {
+    width: '100%', background: S.surface2, border: `1px solid ${S.border}`,
+    borderRadius: 8, color: S.text, fontFamily: "'Space Grotesk', sans-serif",
+    fontSize: '1rem', padding: '10px 14px', outline: 'none',
+  };
+  const labelStyle = {
+    display: 'block', fontSize: '0.75rem', fontWeight: 600, color: S.textDim,
+    letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 6,
+  };
+
+  return (
+    <div style={{ maxWidth: 480, margin: '40px auto 0', textAlign: 'center', padding: '0 8px' }}>
+      <div style={{ fontFamily: "'Space Mono', monospace", fontSize: '1.8rem', fontWeight: 700, marginBottom: 4 }}>
+        Word<span style={{ color: S.amber }}>Forge</span>
+      </div>
+      <p style={{ color: S.textDim, fontSize: '0.88rem', marginBottom: 28 }}>
+        Form words from letters inside a word or phrase. Most points wins.
+      </p>
+
+      {/* Mode */}
+      <div style={{ display: 'flex', gap: 8, marginBottom: 12, justifyContent: 'center' }}>
+        {['sync','async'].map(m => (
+          <button key={m} onClick={() => setMode(m)} style={{
+            padding: '7px 20px', borderRadius: 7, border: `1px solid ${mode===m ? S.amber : S.border}`,
+            background: mode===m ? S.amber : 'transparent', color: mode===m ? '#0d0f14' : S.textDim,
+            fontFamily: "'Space Grotesk', sans-serif", fontWeight: 600, fontSize: '0.85rem', cursor: 'pointer',
+          }}>
+            {m === 'sync' ? '⚡ Sync' : '⏱ Async'}
+          </button>
+        ))}
+      </div>
+
+      {/* Mode explainer */}
+      <div style={{
+        background: S.surface2, border: `1px solid ${S.border}`, borderRadius: 8,
+        padding: '10px 14px', marginBottom: 20, textAlign: 'left',
+      }}>
+        {mode === 'sync' ? (
+          <>
+            <div style={{ fontSize: '0.78rem', fontWeight: 700, color: S.amber, marginBottom: 3 }}>⚡ Simultaneous Play</div>
+            <div style={{ fontSize: '0.8rem', color: S.textDim, lineHeight: 1.5 }}>
+              Both players play at the same time on the same screen. Pass a device back and forth, or play side-by-side on the honor system. Whoever scores more before the timer runs out wins.
+            </div>
+          </>
+        ) : (
+          <>
+            <div style={{ fontSize: '0.78rem', fontWeight: 700, color: S.amber, marginBottom: 3 }}>⏱ Take Turns</div>
+            <div style={{ fontSize: '0.8rem', color: S.textDim, lineHeight: 1.5 }}>
+              Player 1 goes first with a full timer, then Player 2 takes their turn. Any word Player 1 already found is locked out and scores zero for Player 2 — so finding words fast matters.
+            </div>
+          </>
+        )}
+      </div>
+
+      {[
+        { label: 'Source Word / Phrase', val: phrase, set: setPhrase, ph: 'e.g. INFORMATION', max: 30 },
+        { label: 'Player 1 Name', val: p1, set: setP1, ph: 'Player 1' },
+        { label: 'Player 2 Name', val: p2, set: setP2, ph: 'Player 2' },
+      ].map(({ label, val, set, ph, max }) => (
+        <div key={label} style={{ marginBottom: 12, textAlign: 'left' }}>
+          <label style={labelStyle}>{label}</label>
+          <input value={val} onChange={e => set(e.target.value)} placeholder={ph} maxLength={max}
+            onKeyDown={e => e.key === 'Enter' && start()}
+            style={inputStyle} />
+        </div>
+      ))}
+
+      <div style={{ marginBottom: 20, textAlign: 'left' }}>
+        <label style={labelStyle}>Time Limit</label>
+        <select value={time} onChange={e => setTime(e.target.value)} style={{ ...inputStyle }}>
+          <option value="60">1 minute</option>
+          <option value="120">2 minutes</option>
+          <option value="180">3 minutes</option>
+        </select>
+      </div>
+
+      {err && <p style={{ color: S.red, fontSize: '0.82rem', marginBottom: 10 }}>{err}</p>}
+
+      <button onClick={start} style={{
+        width: '100%', padding: '13px 0', borderRadius: 9, border: 'none',
+        background: S.amber, color: '#0d0f14', fontFamily: "'Space Grotesk', sans-serif",
+        fontSize: '1rem', fontWeight: 700, cursor: 'pointer',
+      }}>Start Round →</button>
+    </div>
+  );
+}
+
+// ── MIC BUTTON ──
+function MicButton({ onWord, disabled }) {
+  const [listening, setListening] = useState(false);
+  const [supported] = useState(() => 'webkitSpeechRecognition' in window || 'SpeechRecognition' in window);
+  const recRef = useRef(null);
+
+  function toggleMic() {
+    if (!supported) return;
+    if (listening) {
+      recRef.current?.stop();
+      setListening(false);
+      return;
+    }
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    const rec = new SR();
+    rec.lang = 'en-US';
+    rec.interimResults = false;
+    rec.maxAlternatives = 3;
+    rec.onresult = (e) => {
+      // Try each alternative — pick the one that is purely alphabetic
+      for (let i = 0; i < e.results[0].length; i++) {
+        const t = e.results[0][i].transcript.trim().toUpperCase().replace(/[^A-Z]/g, '');
+        if (t.length >= 2) { onWord(t); break; }
+      }
+    };
+    rec.onerror = () => setListening(false);
+    rec.onend = () => setListening(false);
+    recRef.current = rec;
+    rec.start();
+    setListening(true);
+  }
+
+  if (!supported) return null;
+
+  return (
+    <button
+      onClick={toggleMic}
+      disabled={disabled}
+      title={listening ? 'Stop listening' : 'Speak a word'}
+      style={{
+        width: 46, height: 46, borderRadius: 8, border: `1.5px solid ${listening ? S.amber : S.border}`,
+        background: listening ? S.amberGlow : S.surface2,
+        color: listening ? S.amber : S.textDim,
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        cursor: disabled ? 'not-allowed' : 'pointer',
+        flexShrink: 0,
+        animation: listening ? 'micPulse 1s infinite alternate' : 'none',
+        transition: 'all 0.15s',
+      }}
+    >
+      {listening ? (
+        // Waveform icon while active
+        <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+          <rect x="2" y="6" width="2.5" height="8" rx="1.25" fill="currentColor"/>
+          <rect x="6" y="3" width="2.5" height="14" rx="1.25" fill="currentColor"/>
+          <rect x="10" y="1" width="2.5" height="18" rx="1.25" fill="currentColor"/>
+          <rect x="14" y="4" width="2.5" height="12" rx="1.25" fill="currentColor"/>
+          <rect x="18" y="7" width="2.5" height="6" rx="1.25" fill="currentColor" opacity="0.5"/>
+        </svg>
+      ) : (
+        // Mic icon when idle
+        <svg width="18" height="20" viewBox="0 0 18 20" fill="none">
+          <rect x="5.5" y="1" width="7" height="11" rx="3.5" stroke="currentColor" strokeWidth="1.8"/>
+          <path d="M2 10c0 3.866 3.134 7 7 7s7-3.134 7-7" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"/>
+          <line x1="9" y1="17" x2="9" y2="20" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"/>
+        </svg>
+      )}
+    </button>
+  );
+}
+
+// ── GAME ──
+function GameScreen({ config, onEnd }) {
+  const { phrase, p1Name, p2Name, totalSecs, mode } = config;
+  const letters = phrase.replace(/\s/g, '').split('');
+
+  const [secsLeft, setSecsLeft] = useState(totalSecs);
+  const [tilesVisible, setTilesVisible] = useState(false);
+  const [wordInput, setWordInput] = useState('');
+  const [inputState, setInputState] = useState('idle');
+  const [feedback, setFeedback] = useState({ msg: '', type: '' });
+  const [checking, setChecking] = useState(false);
+  const [currentPlayer, setCurrentPlayer] = useState(1);
+  const [players, setPlayers] = useState([
+    { name: p1Name, score: 0, words: [] },
+    { name: p2Name, score: 0, words: [] },
+  ]);
+  const [p1WordSet] = useState(new Set());
+
+  const inputRef = useRef(null);
+  const timerRef = useRef(null);
+  const feedbackRef = useRef(null);
+  const playersRef = useRef(players);
+  useEffect(() => { playersRef.current = players; }, [players]);
+
+  useEffect(() => { setTimeout(() => setTilesVisible(true), 80); }, []);
+  useEffect(() => { inputRef.current?.focus(); }, []);
+
+  const startTimer = useCallback(() => {
+    clearInterval(timerRef.current);
+    timerRef.current = setInterval(() => {
+      setSecsLeft(s => { if (s <= 1) { clearInterval(timerRef.current); return 0; } return s - 1; });
+    }, 1000);
+  }, []);
+
+  useEffect(() => { startTimer(); return () => clearInterval(timerRef.current); }, [startTimer]);
+
+  useEffect(() => {
+    if (secsLeft === 0) {
+      if (mode === 'async' && currentPlayer === 1) {
+        setCurrentPlayer(2);
+        setSecsLeft(totalSecs);
+        showFeedback(`${p1Name} done! ${p2Name}'s turn.`, 'ok');
+        setTimeout(() => startTimer(), 100);
+      } else {
+        clearInterval(timerRef.current);
+        onEnd(playersRef.current);
+      }
+    }
+  }, [secsLeft]);
+
+  function showFeedback(msg, type) {
+    setFeedback({ msg, type });
+    clearTimeout(feedbackRef.current);
+    feedbackRef.current = setTimeout(() => setFeedback({ msg: '', type: '' }), 2800);
+  }
+
+  function restartTimer() {
+    setSecsLeft(totalSecs);
+    startTimer();
+    showFeedback('Timer restarted!', 'ok');
+  }
+
+  async function submitWord(rawWord) {
+    const word = (rawWord || wordInput).trim().toUpperCase().replace(/[^A-Z]/g, '');
+    setWordInput('');
+    inputRef.current?.focus();
+
+    if (word.length < 2) { showFeedback('Word must be at least 2 letters.', 'err'); flash('err'); return; }
+    if (!canMakeWord(word, letters)) { showFeedback(`"${word}" uses letters not in the phrase.`, 'err'); flash('err'); return; }
+
+    const cp = currentPlayer - 1;
+    const already = playersRef.current[cp].words.find(w => w.word === word && !w.stolen);
+    if (already) { showFeedback(`You already found "${word}"!`, 'err'); flash('err'); return; }
+
+    // Show "checking…" while API validates
+    setChecking(true);
+    showFeedback(`Checking "${word}"…`, 'ok');
+    const valid = await isValidWord(word);
+    setChecking(false);
+
+    if (!valid) { showFeedback(`"${word}" isn't a valid English word.`, 'err'); flash('err'); return; }
+
+    const pts = wordScore(word);
+
+    if (mode === 'async' && currentPlayer === 2 && p1WordSet.has(word)) {
+      setPlayers(prev => {
+        const next = [...prev];
+        next[1] = { ...next[1], words: [{ word, pts: 0, stolen: true }, ...next[1].words] };
+        return next;
+      });
+      showFeedback(`"${word}" was already found by ${p1Name}!`, 'err');
+      return;
+    }
+
+    if (mode === 'async' && currentPlayer === 1) p1WordSet.add(word);
+
+    setPlayers(prev => {
+      const next = [...prev];
+      next[cp] = { ...next[cp], score: next[cp].score + pts, words: [{ word, pts, stolen: false }, ...next[cp].words] };
+      return next;
+    });
+
+    showFeedback(`"${word}" — +${pts} pts!`, 'ok');
+    flash('ok');
+  }
+
+  function flash(type) {
+    setInputState(type);
+    setTimeout(() => setInputState('idle'), 400);
+  }
+
+  const m = Math.floor(secsLeft / 60);
+  const s = secsLeft % 60;
+  const timerStr = `${m}:${s.toString().padStart(2, '0')}`;
+  const urgent = secsLeft <= 15;
+  const barPct = (secsLeft / totalSecs) * 100;
+  const barColor = urgent ? S.red : secsLeft <= 30 ? '#e0a020' : S.amber;
+  const inputBorder = inputState === 'ok' ? S.teal : inputState === 'err' ? S.red : S.border;
+  const cpIdx = currentPlayer - 1;
+  const currentWords = players[cpIdx].words;
+  const uniqueLetters = [...new Set(letters)];
+
+  const tiles = [];
+  let tileIdx = 0;
+  phrase.split(' ').forEach((word, wi, arr) => {
+    word.split('').forEach(ch => { tiles.push(<Tile key={tileIdx} ch={ch} idx={tileIdx++} visible={tilesVisible} />); });
+    if (wi < arr.length - 1) tiles.push(<div key={`sp-${wi}`} style={{ width: 8 }} />);
+  });
+
+  return (
+    <div style={{ width: '100%', maxWidth: 900 }}>
+      {mode === 'async' && (
+        <div style={{ display: 'inline-flex', alignItems: 'center', gap: 7, background: S.amberGlow, border: `1px solid ${S.amberDim}`, borderRadius: 99, padding: '4px 14px', fontSize: '0.78rem', fontWeight: 600, color: S.amber, marginBottom: 14 }}>
+          <span style={{ width: 7, height: 7, borderRadius: '50%', background: S.amber, display: 'inline-block', animation: 'blink 1s infinite' }} />
+          {players[cpIdx].name}'s Turn
+        </div>
+      )}
+
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 290px', gap: 16 }}>
+        {/* LEFT */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+          <div style={{ background: S.surface, border: `1px solid ${S.border}`, borderRadius: 12, padding: 20 }}>
+            <div style={{ fontSize: '0.7rem', fontWeight: 700, letterSpacing: '0.12em', textTransform: 'uppercase', color: S.textDim, marginBottom: 10 }}>Source Phrase</div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7, marginBottom: 18, minHeight: 50 }}>{tiles}</div>
+
+            {/* Timer */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 }}>
+              <div style={{ fontFamily: "'Space Mono', monospace", fontSize: '1.9rem', fontWeight: 700, color: urgent ? S.red : S.amber, minWidth: 68, animation: urgent ? 'pulse 0.5s infinite alternate' : 'none' }}>
+                {timerStr}
+              </div>
+              <div style={{ flex: 1, height: 5, background: S.surface2, borderRadius: 99, overflow: 'hidden' }}>
+                <div style={{ height: '100%', width: `${barPct}%`, background: barColor, borderRadius: 99, transition: 'width 1s linear, background 0.3s' }} />
+              </div>
+            </div>
+
+            {/* Input row */}
+            <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
+              <input
+                ref={inputRef}
+                value={wordInput}
+                onChange={e => setWordInput(e.target.value.toUpperCase())}
+                onKeyDown={e => e.key === 'Enter' && !checking && submitWord()}
+                placeholder="TYPE OR SPEAK A WORD…"
+                disabled={checking}
+                style={{
+                  flex: 1, background: S.surface2, border: `1.5px solid ${inputBorder}`,
+                  borderRadius: 8, color: S.text, fontFamily: "'Space Mono', monospace",
+                  fontSize: '1.05rem', fontWeight: 700, padding: '10px 14px',
+                  letterSpacing: '0.08em', outline: 'none',
+                  animation: inputState === 'err' ? 'shake 0.3s' : 'none',
+                  transition: 'border-color 0.15s',
+                  opacity: checking ? 0.6 : 1,
+                }}
+              />
+              <MicButton onWord={w => submitWord(w)} disabled={checking} />
+              <button onClick={() => !checking && submitWord()} disabled={checking} style={{
+                padding: '10px 18px', background: S.amber, border: 'none', borderRadius: 8,
+                color: '#0d0f14', fontFamily: "'Space Grotesk', sans-serif",
+                fontWeight: 700, fontSize: '0.9rem', cursor: checking ? 'not-allowed' : 'pointer',
+                opacity: checking ? 0.6 : 1,
+              }}>FORGE</button>
+            </div>
+
+            {/* Mic hint */}
+            {'webkitSpeechRecognition' in window || 'SpeechRecognition' in window ? (
+              <div style={{ fontSize: '0.72rem', color: S.textDim, marginBottom: 6 }}>
+                🎙 Tap the mic and say a word — it auto-submits when heard
+              </div>
+            ) : null}
+
+            <div style={{ height: 20, fontSize: '0.82rem', fontWeight: 500, color: feedback.type === 'ok' ? S.teal : S.red }}>
+              {feedback.msg}
+            </div>
+          </div>
+
+          {/* Found words */}
+          <div style={{ background: S.surface, border: `1px solid ${S.border}`, borderRadius: 12, padding: 20 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+              <span style={{ fontSize: '0.7rem', fontWeight: 700, letterSpacing: '0.12em', textTransform: 'uppercase', color: S.textDim }}>{players[cpIdx].name}'s Words</span>
+              <span style={{ fontFamily: "'Space Mono', monospace", color: S.amber, fontWeight: 700, fontSize: '0.9rem' }}>{currentWords.filter(w => !w.stolen).length}</span>
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 5, maxHeight: 220, overflowY: 'auto' }}>
+              {currentWords.length === 0
+                ? <div style={{ color: S.textDim, fontSize: '0.82rem', padding: '6px 0' }}>No words yet — start typing or speak!</div>
+                : currentWords.map(({ word, pts, stolen }, i) => (
+                  <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: S.surface2, borderRadius: 6, padding: '7px 12px', opacity: stolen ? 0.4 : 1, textDecoration: stolen ? 'line-through' : 'none' }}>
+                    <span style={{ fontFamily: "'Space Mono', monospace", fontWeight: 700, fontSize: '0.88rem', letterSpacing: '0.05em' }}>{word}</span>
+                    <span style={{ color: S.amber, fontWeight: 600, fontSize: '0.8rem' }}>+{pts}</span>
+                  </div>
+                ))
+              }
+            </div>
+          </div>
+        </div>
+
+        {/* RIGHT SIDEBAR */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <div style={{ background: S.surface, border: `1px solid ${S.border}`, borderRadius: 12, padding: 18 }}>
+            <div style={{ fontSize: '0.7rem', fontWeight: 700, letterSpacing: '0.12em', textTransform: 'uppercase', color: S.textDim, marginBottom: 14 }}>Scoreboard</div>
+            {players.map((p, i) => (
+              <div key={i}>
+                <div style={{ background: S.surface2, borderRadius: 8, padding: '12px 14px', border: `1.5px solid ${currentPlayer === i+1 ? S.amber : 'transparent'}`, marginBottom: i === 0 ? 8 : 0 }}>
+                  <div style={{ fontSize: '0.72rem', fontWeight: 600, color: S.textDim, textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: 2 }}>{p.name}</div>
+                  <div style={{ fontFamily: "'Space Mono', monospace", fontSize: '1.9rem', fontWeight: 700, lineHeight: 1 }}>{p.score}</div>
+                  <div style={{ fontSize: '0.72rem', color: S.textDim, marginTop: 2 }}>{p.words.filter(w => !w.stolen).length} words</div>
+                </div>
+                {i === 0 && <div style={{ textAlign: 'center', fontSize: '0.68rem', fontWeight: 700, color: S.textDim, letterSpacing: '0.15em', margin: '4px 0' }}>VS</div>}
+              </div>
+            ))}
+          </div>
+
+          <div style={{ background: S.surface, border: `1px solid ${S.border}`, borderRadius: 12, padding: 18 }}>
+            <div style={{ fontSize: '0.7rem', fontWeight: 700, letterSpacing: '0.12em', textTransform: 'uppercase', color: S.textDim, marginBottom: 10 }}>Letter Values</div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
+              {uniqueLetters.map(ch => (
+                <div key={ch} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', background: S.surface2, borderRadius: 5, padding: '4px 7px', minWidth: 30 }}>
+                  <span style={{ fontFamily: "'Space Mono', monospace", fontWeight: 700, fontSize: '0.85rem' }}>{ch}</span>
+                  <span style={{ fontSize: '0.58rem', color: S.amber, fontWeight: 700 }}>{LV[ch] || 0}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <button onClick={restartTimer} style={{ width: '100%', padding: '11px 0', borderRadius: 8, border: `1px solid ${S.border}`, background: S.surface2, color: S.text, fontFamily: "'Space Grotesk', sans-serif", fontWeight: 600, fontSize: '0.88rem', cursor: 'pointer' }}>↺ Restart Timer</button>
+          <button onClick={() => { clearInterval(timerRef.current); onEnd(players); }} style={{ width: '100%', padding: '11px 0', borderRadius: 8, border: `1px solid ${S.border}`, background: S.surface2, color: S.textDim, fontFamily: "'Space Grotesk', sans-serif", fontWeight: 600, fontSize: '0.88rem', cursor: 'pointer' }}>End Round</button>
+        </div>
+      </div>
+
+      <style>{`
+        @keyframes pulse { from{opacity:1} to{opacity:0.45} }
+        @keyframes shake { 0%,100%{transform:translateX(0)} 25%{transform:translateX(-5px)} 75%{transform:translateX(5px)} }
+        @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.2} }
+        @keyframes micPulse { from{box-shadow:0 0 0 0 rgba(245,166,35,0.4)} to{box-shadow:0 0 0 6px rgba(245,166,35,0)} }
+      `}</style>
+    </div>
+  );
+}
+
+// ── END ──
+function EndScreen({ players, onReset }) {
+  const [p1, p2] = players;
+  const tie = p1.score === p2.score;
+  const p1Wins = p1.score > p2.score;
+  return (
+    <div style={{ maxWidth: 480, margin: '60px auto 0', textAlign: 'center', padding: '0 8px' }}>
+      <div style={{ fontSize: '2.2rem', marginBottom: 4 }}>{tie ? '🤝' : '👑'}</div>
+      <div style={{ fontSize: '2rem', fontWeight: 700, marginBottom: 6 }}>{tie ? "It's a Tie!" : `${p1Wins ? p1.name : p2.name} Wins!`}</div>
+      <div style={{ color: S.textDim, fontSize: '0.88rem', marginBottom: 28 }}>Round complete</div>
+      <div style={{ display: 'flex', gap: 12, marginBottom: 28 }}>
+        {players.map((p, i) => (
+          <div key={i} style={{ flex: 1, background: S.surface, borderRadius: 10, padding: '18px 16px', border: `1px solid ${(!tie && (i===0 ? p1Wins : !p1Wins)) ? S.amber : S.border}` }}>
+            <div style={{ fontSize: '0.72rem', fontWeight: 600, color: S.textDim, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 4 }}>{p.name}</div>
+            <div style={{ fontFamily: "'Space Mono', monospace", fontSize: '2.2rem', fontWeight: 700, color: S.amber }}>{p.score}</div>
+            <div style={{ fontSize: '0.75rem', color: S.textDim, marginTop: 2 }}>{p.words.filter(w => !w.stolen).length} words</div>
+          </div>
+        ))}
+      </div>
+      <button onClick={onReset} style={{ width: '100%', padding: '13px 0', borderRadius: 9, border: 'none', background: S.amber, color: '#0d0f14', fontFamily: "'Space Grotesk', sans-serif", fontSize: '1rem', fontWeight: 700, cursor: 'pointer' }}>Play Again</button>
+    </div>
+  );
+}
+
+// ── ROOT ──
+function WordForge() {
+  const [screen, setScreen] = useState('setup');
+  const [config, setConfig] = useState(null);
+  const [finalPlayers, setFinalPlayers] = useState(null);
+
+  return (
+    <div style={{ background: S.bg, minHeight: '100vh', color: S.text, fontFamily: "'Space Grotesk', sans-serif", display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '0 16px 40px' }}>
+      {screen !== 'setup' && (
+        <div style={{ width: '100%', maxWidth: 900, display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '18px 0 14px', borderBottom: `1px solid ${S.border}`, marginBottom: 20 }}>
+          <div style={{ fontFamily: "'Space Mono', monospace", fontSize: '1.3rem', fontWeight: 700 }}>Word<span style={{ color: S.amber }}>Forge</span></div>
+          <button onClick={() => setScreen('setup')} style={{ background: 'transparent', border: `1px solid ${S.border}`, borderRadius: 7, color: S.textDim, padding: '5px 13px', fontFamily: "'Space Grotesk', sans-serif", fontSize: '0.8rem', cursor: 'pointer' }}>← New Game</button>
+        </div>
+      )}
+      {screen === 'setup' && <SetupScreen onStart={cfg => { setConfig(cfg); setScreen('game'); }} />}
+      {screen === 'game' && config && <GameScreen key={JSON.stringify(config)} config={config} onEnd={p => { setFinalPlayers(p); setScreen('end'); }} />}
+      {screen === 'end' && finalPlayers && <EndScreen players={finalPlayers} onReset={() => setScreen('setup')} />}
+    </div>
+  );
+}
+
+const root = ReactDOM.createRoot(document.getElementById('root'));
+root.render(<WordForge />);
+</script>
+</body>
+</html>
