@@ -4,7 +4,7 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>WordForge</title>
-<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet" />
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Space+Mono:wght@400;700&family=Oswald:wght@500;600;700&family=Press+Start+2P&family=Cinzel:wght@600;700&family=Playfair+Display:wght@700;800&family=Orbitron:wght@600;700;800&family=VT323&display=swap" rel="stylesheet" />
 <style>
   html, body { margin: 0; padding: 0; background: #0d0f14; }
   #root { min-height: 100vh; }
@@ -76,11 +76,21 @@ async function isValidWord(word) {
 }
 // ── ARENA THEMES ──
 const THEMES = {
-  ember: { name: 'Ember Forge', icon: '🔥', bg: '#0d0f14', surface: '#161a23', surface2: '#1e2330', border: '#2a3045', amber: '#f5a623', amberDim: '#c47d0e', amberGlow: 'rgba(245,166,35,0.12)', teal: '#3ecfb2', red: '#e05a5a', text: '#e8eaf0', textDim: '#6e7a99' },
-  neon: { name: 'Neon Arcade', icon: '🌆', bg: '#0a0014', surface: '#160a28', surface2: '#1f0f3a', border: '#3a1f5c', amber: '#ff2bd6', amberDim: '#b81ea0', amberGlow: 'rgba(255,43,214,0.15)', teal: '#19f4ff', red: '#ff4d6d', text: '#f1e8ff', textDim: '#8a7aad' },
-  royal: { name: 'Royal Court', icon: '👑', bg: '#1a1209', surface: '#2a1d10', surface2: '#3a2a16', border: '#5c4226', amber: '#d4af37', amberDim: '#9c7e26', amberGlow: 'rgba(212,175,55,0.15)', teal: '#7a9e7e', red: '#a83232', text: '#f3e9d2', textDim: '#a68a5c' },
-  space: { name: 'Deep Space', icon: '🪐', bg: '#070914', surface: '#10142a', surface2: '#171c3a', border: '#2a3262', amber: '#7c9bff', amberDim: '#5170c4', amberGlow: 'rgba(124,155,255,0.15)', teal: '#5ff0d7', red: '#ff5d8f', text: '#e6e9ff', textDim: '#6c74a8' },
-  terminal: { name: 'Retro Terminal', icon: '🖥️', bg: '#040a04', surface: '#0a160a', surface2: '#0f1f0f', border: '#1f4a1f', amber: '#39ff6a', amberDim: '#1f9a3f', amberGlow: 'rgba(57,255,106,0.15)', teal: '#39ff6a', red: '#ff4444', text: '#c8ffcf', textDim: '#4a8a4a' }
+  ember: { name: 'Ember Forge', icon: '🔥', bg: '#0d0f14', surface: '#161a23', surface2: '#1e2330', border: '#2a3045', amber: '#f5a623', amberDim: '#c47d0e', amberGlow: 'rgba(245,166,35,0.12)', teal: '#3ecfb2', red: '#e05a5a', text: '#e8eaf0', textDim: '#6e7a99',
+    font: "'Oswald', sans-serif", fontMono: "'Space Mono', monospace", radius: 8, tracking: '0.01em', glow: '0 0 20px rgba(245,166,35,0.28)',
+    texture: 'radial-gradient(circle at 50% -10%, rgba(245,166,35,0.16), transparent 60%)', textureSize: 'auto' },
+  neon: { name: 'Neon Arcade', icon: '🌆', bg: '#0a0014', surface: '#160a28', surface2: '#1f0f3a', border: '#3a1f5c', amber: '#ff2bd6', amberDim: '#b81ea0', amberGlow: 'rgba(255,43,214,0.15)', teal: '#19f4ff', red: '#ff4d6d', text: '#f1e8ff', textDim: '#8a7aad',
+    font: "'Press Start 2P', cursive", fontMono: "'Space Mono', monospace", radius: 4, tracking: '0.02em', glow: '0 0 26px rgba(255,43,214,0.5)',
+    texture: 'radial-gradient(circle at 15% 10%, rgba(255,43,214,0.16), transparent 50%), radial-gradient(circle at 85% 90%, rgba(25,244,255,0.14), transparent 50%)', textureSize: 'auto' },
+  royal: { name: 'Royal Court', icon: '👑', bg: '#1a1209', surface: '#2a1d10', surface2: '#3a2a16', border: '#5c4226', amber: '#d4af37', amberDim: '#9c7e26', amberGlow: 'rgba(212,175,55,0.15)', teal: '#7a9e7e', red: '#a83232', text: '#f3e9d2', textDim: '#a68a5c',
+    font: "'Cinzel', serif", fontMono: "'Playfair Display', serif", radius: 14, tracking: '0.04em', glow: '0 0 18px rgba(212,175,55,0.32)',
+    texture: 'radial-gradient(circle at 50% 0%, rgba(212,175,55,0.14), transparent 55%)', textureSize: 'auto' },
+  space: { name: 'Deep Space', icon: '🪐', bg: '#070914', surface: '#10142a', surface2: '#171c3a', border: '#2a3262', amber: '#7c9bff', amberDim: '#5170c4', amberGlow: 'rgba(124,155,255,0.15)', teal: '#5ff0d7', red: '#ff5d8f', text: '#e6e9ff', textDim: '#6c74a8',
+    font: "'Orbitron', sans-serif", fontMono: "'Space Mono', monospace", radius: 10, tracking: '0.05em', glow: '0 0 28px rgba(124,155,255,0.42)',
+    texture: 'radial-gradient(1.5px 1.5px at 10% 20%, rgba(255,255,255,0.55) 50%, transparent 50%), radial-gradient(1.5px 1.5px at 80% 60%, rgba(255,255,255,0.45) 50%, transparent 50%), radial-gradient(1px 1px at 40% 80%, rgba(255,255,255,0.5) 50%, transparent 50%), radial-gradient(1.5px 1.5px at 60% 30%, rgba(255,255,255,0.4) 50%, transparent 50%), radial-gradient(1px 1px at 90% 10%, rgba(255,255,255,0.45) 50%, transparent 50%)', textureSize: '220px 220px' },
+  terminal: { name: 'Retro Terminal', icon: '🖥️', bg: '#040a04', surface: '#0a160a', surface2: '#0f1f0f', border: '#1f4a1f', amber: '#39ff6a', amberDim: '#1f9a3f', amberGlow: 'rgba(57,255,106,0.15)', teal: '#39ff6a', red: '#ff4444', text: '#c8ffcf', textDim: '#4a8a4a',
+    font: "'VT323', monospace", fontMono: "'VT323', monospace", radius: 2, tracking: '0.02em', glow: '0 0 14px rgba(57,255,106,0.5)',
+    texture: 'repeating-linear-gradient(0deg, rgba(57,255,106,0.06) 0px, rgba(57,255,106,0.06) 1px, transparent 1px, transparent 3px)', textureSize: 'auto' }
 };
 const THEME_ORDER = ['ember', 'neon', 'royal', 'space', 'terminal'];
 function applyTheme(key) {
@@ -138,19 +148,21 @@ function WordPopup({
     }
   }, /*#__PURE__*/React.createElement("div", {
     style: {
+      fontFamily: S.font,
       fontSize: big ? '1rem' : '0.8rem',
       fontWeight: 700,
-      letterSpacing: '0.12em',
+      letterSpacing: S.tracking,
       textTransform: 'uppercase',
       color: tier.level === 'legendary' ? S.amber : tier.level === 'great' ? S.teal : S.text,
       marginBottom: 4
     }
   }, tier.icon, " ", tier.label), /*#__PURE__*/React.createElement("div", {
     style: {
-      fontFamily: "'Space Mono', monospace",
+      fontFamily: S.fontMono,
       fontWeight: 700,
       fontSize: big ? '2.6rem' : '1.8rem',
-      color: S.text
+      color: S.text,
+      textShadow: big ? S.glow : 'none'
     }
   }, word, " ", /*#__PURE__*/React.createElement("span", {
     style: {
@@ -173,7 +185,7 @@ function ArenaPicker({
   const arrowStyle = {
     width: 30,
     height: 30,
-    borderRadius: 7,
+    borderRadius: theme.radius,
     border: `1px solid ${theme.border}`,
     background: 'transparent',
     color: theme.textDim,
@@ -203,9 +215,10 @@ function ArenaPicker({
       gap: 10,
       background: theme.surface2,
       border: `1.5px solid ${theme.border}`,
-      borderRadius: 10,
+      borderRadius: theme.radius + 4,
       padding: '10px 12px',
-      transition: 'background 0.3s, border-color 0.3s'
+      boxShadow: theme.glow,
+      transition: 'background 0.3s, border-color 0.3s, border-radius 0.3s, box-shadow 0.3s'
     }
   }, /*#__PURE__*/React.createElement("button", {
     onClick: () => go(-1),
@@ -222,7 +235,8 @@ function ArenaPicker({
     }
   }, theme.icon), /*#__PURE__*/React.createElement("div", {
     style: {
-      fontFamily: "'Space Grotesk', sans-serif",
+      fontFamily: theme.font,
+      letterSpacing: theme.tracking,
       fontWeight: 700,
       fontSize: '0.85rem',
       color: theme.text
@@ -276,12 +290,12 @@ function Tile({
 }) {
   return /*#__PURE__*/React.createElement("div", {
     style: {
-      fontFamily: "'Space Mono', monospace",
+      fontFamily: S.fontMono,
       fontSize: '1.2rem',
       fontWeight: 700,
       width: 44,
       height: 44,
-      borderRadius: 8,
+      borderRadius: S.radius,
       border: `1.5px solid ${S.border}`,
       background: S.surface2,
       display: 'flex',
@@ -291,7 +305,7 @@ function Tile({
       position: 'relative',
       opacity: visible ? 1 : 0,
       transform: visible ? 'translateY(0)' : 'translateY(-10px)',
-      transition: `opacity 0.3s ${idx * 55}ms, transform 0.3s ${idx * 55}ms`,
+      transition: `opacity 0.3s ${idx * 55}ms, transform 0.3s ${idx * 55}ms, font-family 0.2s, border-radius 0.2s`,
       flexShrink: 0
     }
   }, ch, /*#__PURE__*/React.createElement("span", {
@@ -301,7 +315,7 @@ function Tile({
       right: 4,
       fontSize: '0.5rem',
       color: S.textDim,
-      fontFamily: "'Space Mono', monospace"
+      fontFamily: S.fontMono
     }
   }, LV[ch] || 0));
 }
@@ -362,10 +376,12 @@ function SetupScreen({
     }
   }, /*#__PURE__*/React.createElement("div", {
     style: {
-      fontFamily: "'Space Mono', monospace",
+      fontFamily: S.font,
+      letterSpacing: S.tracking,
       fontSize: '1.8rem',
       fontWeight: 700,
-      marginBottom: 4
+      marginBottom: 4,
+      transition: 'font-family 0.2s'
     }
   }, "Word", /*#__PURE__*/React.createElement("span", {
     style: {
@@ -389,14 +405,15 @@ function SetupScreen({
     onClick: () => setMode(m),
     style: {
       padding: '7px 20px',
-      borderRadius: 7,
+      borderRadius: S.radius,
       border: `1px solid ${mode === m ? S.amber : S.border}`,
       background: mode === m ? S.amber : 'transparent',
       color: mode === m ? '#0d0f14' : S.textDim,
-      fontFamily: "'Space Grotesk', sans-serif",
+      fontFamily: S.font,
       fontWeight: 600,
-      fontSize: '0.85rem',
-      cursor: 'pointer'
+      fontSize: '0.8rem',
+      cursor: 'pointer',
+      transition: 'font-family 0.2s, border-radius 0.2s'
     }
   }, m === 'sync' ? '⚡ Sync' : '⏱ Async'))), /*#__PURE__*/React.createElement("div", {
     style: {
@@ -503,14 +520,16 @@ function SetupScreen({
     style: {
       width: '100%',
       padding: '13px 0',
-      borderRadius: 9,
+      borderRadius: S.radius + 1,
       border: 'none',
       background: S.amber,
       color: '#0d0f14',
-      fontFamily: "'Space Grotesk', sans-serif",
-      fontSize: '1rem',
+      fontFamily: S.font,
+      fontSize: '0.95rem',
       fontWeight: 700,
-      cursor: 'pointer'
+      cursor: 'pointer',
+      boxShadow: S.glow,
+      transition: 'font-family 0.2s, border-radius 0.2s, box-shadow 0.3s'
     }
   }, "Start Round →"));
 }
@@ -894,7 +913,7 @@ function GameScreen({
     style: {
       background: S.surface,
       border: `1px solid ${S.border}`,
-      borderRadius: 12,
+      borderRadius: S.radius + 4,
       padding: 20
     }
   }, /*#__PURE__*/React.createElement("div", {
@@ -923,7 +942,7 @@ function GameScreen({
     }
   }, /*#__PURE__*/React.createElement("div", {
     style: {
-      fontFamily: "'Space Mono', monospace",
+      fontFamily: S.fontMono,
       fontSize: '1.9rem',
       fontWeight: 700,
       color: urgent ? S.red : S.amber,
@@ -963,9 +982,9 @@ function GameScreen({
       flex: 1,
       background: S.surface2,
       border: `1.5px solid ${inputBorder}`,
-      borderRadius: 8,
+      borderRadius: S.radius,
       color: S.text,
-      fontFamily: "'Space Mono', monospace",
+      fontFamily: S.fontMono,
       fontSize: '1.05rem',
       fontWeight: 700,
       padding: '10px 14px',
@@ -985,13 +1004,15 @@ function GameScreen({
       padding: '10px 18px',
       background: S.amber,
       border: 'none',
-      borderRadius: 8,
+      borderRadius: S.radius,
       color: '#0d0f14',
-      fontFamily: "'Space Grotesk', sans-serif",
+      fontFamily: S.font,
       fontWeight: 700,
       fontSize: '0.9rem',
       cursor: checking ? 'not-allowed' : 'pointer',
-      opacity: checking ? 0.6 : 1
+      opacity: checking ? 0.6 : 1,
+      boxShadow: S.glow,
+      transition: 'font-family 0.2s, border-radius 0.2s, box-shadow 0.3s'
     }
   }, "FORGE")), 'webkitSpeechRecognition' in window || 'SpeechRecognition' in window ? /*#__PURE__*/React.createElement("div", {
     style: {
@@ -1010,7 +1031,7 @@ function GameScreen({
     style: {
       background: S.surface,
       border: `1px solid ${S.border}`,
-      borderRadius: 12,
+      borderRadius: S.radius + 4,
       padding: 20
     }
   }, /*#__PURE__*/React.createElement("div", {
@@ -1030,7 +1051,7 @@ function GameScreen({
     }
   }, players[cpIdx].name, "'s Words"), /*#__PURE__*/React.createElement("span", {
     style: {
-      fontFamily: "'Space Mono', monospace",
+      fontFamily: S.fontMono,
       color: S.amber,
       fontWeight: 700,
       fontSize: '0.9rem'
@@ -1067,7 +1088,7 @@ function GameScreen({
     }
   }, /*#__PURE__*/React.createElement("span", {
     style: {
-      fontFamily: "'Space Mono', monospace",
+      fontFamily: S.fontMono,
       fontWeight: 700,
       fontSize: '0.88rem',
       letterSpacing: '0.05em'
@@ -1088,7 +1109,7 @@ function GameScreen({
     style: {
       background: S.surface,
       border: `1px solid ${S.border}`,
-      borderRadius: 12,
+      borderRadius: S.radius + 4,
       padding: 18
     }
   }, /*#__PURE__*/React.createElement("div", {
@@ -1121,7 +1142,7 @@ function GameScreen({
     }
   }, p.name), /*#__PURE__*/React.createElement("div", {
     style: {
-      fontFamily: "'Space Mono', monospace",
+      fontFamily: S.fontMono,
       fontSize: '1.9rem',
       fontWeight: 700,
       lineHeight: 1
@@ -1145,7 +1166,7 @@ function GameScreen({
     style: {
       background: S.surface,
       border: `1px solid ${S.border}`,
-      borderRadius: 12,
+      borderRadius: S.radius + 4,
       padding: 18
     }
   }, /*#__PURE__*/React.createElement("div", {
@@ -1176,7 +1197,7 @@ function GameScreen({
     }
   }, /*#__PURE__*/React.createElement("span", {
     style: {
-      fontFamily: "'Space Mono', monospace",
+      fontFamily: S.fontMono,
       fontWeight: 700,
       fontSize: '0.85rem'
     }
@@ -1191,14 +1212,15 @@ function GameScreen({
     style: {
       width: '100%',
       padding: '11px 0',
-      borderRadius: 8,
+      borderRadius: S.radius,
       border: `1px solid ${S.border}`,
       background: S.surface2,
       color: S.text,
-      fontFamily: "'Space Grotesk', sans-serif",
+      fontFamily: S.font,
       fontWeight: 600,
       fontSize: '0.88rem',
-      cursor: 'pointer'
+      cursor: 'pointer',
+      transition: 'font-family 0.2s, border-radius 0.2s'
     }
   }, "↺ Restart Timer"), /*#__PURE__*/React.createElement("button", {
     onClick: () => {
@@ -1208,14 +1230,15 @@ function GameScreen({
     style: {
       width: '100%',
       padding: '11px 0',
-      borderRadius: 8,
+      borderRadius: S.radius,
       border: `1px solid ${S.border}`,
       background: S.surface2,
       color: S.textDim,
-      fontFamily: "'Space Grotesk', sans-serif",
+      fontFamily: S.font,
       fontWeight: 600,
       fontSize: '0.88rem',
-      cursor: 'pointer'
+      cursor: 'pointer',
+      transition: 'font-family 0.2s, border-radius 0.2s'
     }
   }, "End Round"))), /*#__PURE__*/React.createElement("style", null, `
         @keyframes pulse { from{opacity:1} to{opacity:0.45} }
@@ -1251,7 +1274,9 @@ function EndScreen({
     style: {
       fontSize: '2rem',
       fontWeight: 700,
-      marginBottom: 6
+      marginBottom: 6,
+      fontFamily: S.font,
+      letterSpacing: S.tracking
     }
   }, tie ? "It's a Tie!" : `${p1Wins ? p1.name : p2.name} Wins!`), /*#__PURE__*/React.createElement("div", {
     style: {
@@ -1270,7 +1295,7 @@ function EndScreen({
     style: {
       flex: 1,
       background: S.surface,
-      borderRadius: 10,
+      borderRadius: S.radius + 4,
       padding: '18px 16px',
       border: `1px solid ${!tie && (i === 0 ? p1Wins : !p1Wins) ? S.amber : S.border}`
     }
@@ -1285,7 +1310,7 @@ function EndScreen({
     }
   }, p.name), /*#__PURE__*/React.createElement("div", {
     style: {
-      fontFamily: "'Space Mono', monospace",
+      fontFamily: S.fontMono,
       fontSize: '2.2rem',
       fontWeight: 700,
       color: S.amber
@@ -1301,14 +1326,15 @@ function EndScreen({
     style: {
       width: '100%',
       padding: '13px 0',
-      borderRadius: 9,
+      borderRadius: S.radius + 1,
       border: 'none',
       background: S.amber,
       color: '#0d0f14',
-      fontFamily: "'Space Grotesk', sans-serif",
+      fontFamily: S.font,
       fontSize: '1rem',
       fontWeight: 700,
-      cursor: 'pointer'
+      cursor: 'pointer',
+      boxShadow: S.glow
     }
   }, "Play Again"));
 }
@@ -1336,13 +1362,17 @@ function WordForge() {
   return /*#__PURE__*/React.createElement("div", {
     style: {
       background: S.bg,
+      backgroundImage: S.texture,
+      backgroundSize: S.textureSize || 'auto',
+      backgroundRepeat: 'repeat',
       minHeight: '100vh',
       color: S.text,
       fontFamily: "'Space Grotesk', sans-serif",
       display: 'flex',
       flexDirection: 'column',
       alignItems: 'center',
-      padding: '0 16px 40px'
+      padding: '0 16px 40px',
+      transition: 'background-color 0.4s'
     }
   }, screen !== 'setup' && /*#__PURE__*/React.createElement("div", {
     style: {
@@ -1357,9 +1387,11 @@ function WordForge() {
     }
   }, /*#__PURE__*/React.createElement("div", {
     style: {
-      fontFamily: "'Space Mono', monospace",
+      fontFamily: S.font,
+      letterSpacing: S.tracking,
       fontSize: '1.3rem',
-      fontWeight: 700
+      fontWeight: 700,
+      transition: 'font-family 0.2s'
     }
   }, "Word", /*#__PURE__*/React.createElement("span", {
     style: {
@@ -1370,11 +1402,11 @@ function WordForge() {
     style: {
       background: 'transparent',
       border: `1px solid ${S.border}`,
-      borderRadius: 7,
+      borderRadius: S.radius,
       color: S.textDim,
       padding: '5px 13px',
-      fontFamily: "'Space Grotesk', sans-serif",
-      fontSize: '0.8rem',
+      fontFamily: S.font,
+      fontSize: '0.78rem',
       cursor: 'pointer'
     }
   }, "← New Game")), screen === 'setup' && /*#__PURE__*/React.createElement(SetupScreen, {
