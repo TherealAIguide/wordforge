@@ -204,9 +204,11 @@ function ArenaPicker({
       fontSize: '0.75rem',
       fontWeight: 600,
       color: S.textDim,
-      letterSpacing: '0.08em',
+      letterSpacing: S.tracking,
       textTransform: 'uppercase',
-      marginBottom: 6
+      marginBottom: 6,
+      fontFamily: S.font,
+      transition: 'font-family 0.2s'
     }
   }, "Battle Arena"), /*#__PURE__*/React.createElement("div", {
     style: {
@@ -351,9 +353,9 @@ function SetupScreen({
     width: '100%',
     background: S.surface2,
     border: `1px solid ${S.border}`,
-    borderRadius: 8,
+    borderRadius: S.radius,
     color: S.text,
-    fontFamily: "'Space Grotesk', sans-serif",
+    fontFamily: S.fontMono,
     fontSize: '1rem',
     padding: '10px 14px',
     outline: 'none'
@@ -363,9 +365,11 @@ function SetupScreen({
     fontSize: '0.75rem',
     fontWeight: 600,
     color: S.textDim,
-    letterSpacing: '0.08em',
+    letterSpacing: S.tracking,
     textTransform: 'uppercase',
-    marginBottom: 6
+    marginBottom: 6,
+    fontFamily: S.font,
+    transition: 'font-family 0.2s'
   };
   return /*#__PURE__*/React.createElement("div", {
     style: {
@@ -429,7 +433,10 @@ function SetupScreen({
       fontSize: '0.78rem',
       fontWeight: 700,
       color: S.amber,
-      marginBottom: 3
+      marginBottom: 3,
+      fontFamily: S.font,
+      letterSpacing: S.tracking,
+      transition: 'font-family 0.2s'
     }
   }, "⚡ Simultaneous Play"), /*#__PURE__*/React.createElement("div", {
     style: {
@@ -442,7 +449,10 @@ function SetupScreen({
       fontSize: '0.78rem',
       fontWeight: 700,
       color: S.amber,
-      marginBottom: 3
+      marginBottom: 3,
+      fontFamily: S.font,
+      letterSpacing: S.tracking,
+      transition: 'font-family 0.2s'
     }
   }, "⏱ Take Turns"), /*#__PURE__*/React.createElement("div", {
     style: {
@@ -920,10 +930,12 @@ function GameScreen({
     style: {
       fontSize: '0.7rem',
       fontWeight: 700,
-      letterSpacing: '0.12em',
+      letterSpacing: S.tracking,
       textTransform: 'uppercase',
       color: S.textDim,
-      marginBottom: 10
+      marginBottom: 10,
+      fontFamily: S.font,
+      transition: 'font-family 0.2s'
     }
   }, "Source Phrase"), /*#__PURE__*/React.createElement("div", {
     style: {
@@ -1045,9 +1057,11 @@ function GameScreen({
     style: {
       fontSize: '0.7rem',
       fontWeight: 700,
-      letterSpacing: '0.12em',
+      letterSpacing: S.tracking,
       textTransform: 'uppercase',
-      color: S.textDim
+      color: S.textDim,
+      fontFamily: S.font,
+      transition: 'font-family 0.2s'
     }
   }, players[cpIdx].name, "'s Words"), /*#__PURE__*/React.createElement("span", {
     style: {
@@ -1116,10 +1130,12 @@ function GameScreen({
     style: {
       fontSize: '0.7rem',
       fontWeight: 700,
-      letterSpacing: '0.12em',
+      letterSpacing: S.tracking,
       textTransform: 'uppercase',
       color: S.textDim,
-      marginBottom: 14
+      marginBottom: 14,
+      fontFamily: S.font,
+      transition: 'font-family 0.2s'
     }
   }, "Scoreboard"), players.map((p, i) => /*#__PURE__*/React.createElement("div", {
     key: i
@@ -1137,8 +1153,10 @@ function GameScreen({
       fontWeight: 600,
       color: S.textDim,
       textTransform: 'uppercase',
-      letterSpacing: '0.07em',
-      marginBottom: 2
+      letterSpacing: S.tracking,
+      marginBottom: 2,
+      fontFamily: S.font,
+      transition: 'font-family 0.2s'
     }
   }, p.name), /*#__PURE__*/React.createElement("div", {
     style: {
@@ -1173,10 +1191,12 @@ function GameScreen({
     style: {
       fontSize: '0.7rem',
       fontWeight: 700,
-      letterSpacing: '0.12em',
+      letterSpacing: S.tracking,
       textTransform: 'uppercase',
       color: S.textDim,
-      marginBottom: 10
+      marginBottom: 10,
+      fontFamily: S.font,
+      transition: 'font-family 0.2s'
     }
   }, "Letter Values"), /*#__PURE__*/React.createElement("div", {
     style: {
@@ -1305,8 +1325,10 @@ function EndScreen({
       fontWeight: 600,
       color: S.textDim,
       textTransform: 'uppercase',
-      letterSpacing: '0.08em',
-      marginBottom: 4
+      letterSpacing: S.tracking,
+      marginBottom: 4,
+      fontFamily: S.font,
+      transition: 'font-family 0.2s'
     }
   }, p.name), /*#__PURE__*/React.createElement("div", {
     style: {
