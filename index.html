@@ -8,6 +8,8 @@
 <style>
   html, body { margin: 0; padding: 0; background: #0d0f14; }
   #root { min-height: 100vh; }
+  @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.2} }
+  @keyframes neonFlicker { 0%,100%{opacity:1} 45%{opacity:1} 46%{opacity:0.35} 47%{opacity:1} 71%{opacity:1} 72%{opacity:0.5} 73%{opacity:1} }
 </style>
 <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
 <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
@@ -21,6 +23,22 @@ const {
   useRef,
   useCallback
 } = React;
+
+// ── RESPONSIVE HELPER ──
+function useIsMobile(breakpoint = 720) {
+  const [isMobile, setIsMobile] = useState(() => typeof window !== 'undefined' && window.innerWidth <= breakpoint);
+  useEffect(() => {
+    const mq = window.matchMedia(`(max-width: ${breakpoint}px)`);
+    const handler = e => setIsMobile(e.matches);
+    if (mq.addEventListener) mq.addEventListener('change', handler);
+    else mq.addListener(handler);
+    return () => {
+      if (mq.removeEventListener) mq.removeEventListener('change', handler);
+      else mq.removeListener(handler);
+    };
+  }, [breakpoint]);
+  return isMobile;
+}
 
 // ── SCRABBLE VALUES ──
 const LV = {
@@ -76,19 +94,19 @@ async function isValidWord(word) {
 }
 // ── ARENA THEMES ──
 const THEMES = {
-  ember: { name: 'Ember Forge', icon: '🔥', bg: '#0d0f14', surface: '#161a23', surface2: '#1e2330', border: '#2a3045', amber: '#f5a623', amberDim: '#c47d0e', amberGlow: 'rgba(245,166,35,0.12)', teal: '#3ecfb2', red: '#e05a5a', text: '#e8eaf0', textDim: '#6e7a99',
+  ember: { key: 'ember', name: 'Ember Forge', icon: '🔥', actionLabel: 'FORGE', bg: '#0d0f14', surface: '#161a23', surface2: '#1e2330', border: '#2a3045', amber: '#f5a623', amberDim: '#c47d0e', amberGlow: 'rgba(245,166,35,0.12)', teal: '#3ecfb2', red: '#e05a5a', text: '#e8eaf0', textDim: '#6e7a99',
     font: "'Oswald', sans-serif", fontMono: "'Space Mono', monospace", radius: 8, tracking: '0.01em', glow: '0 0 20px rgba(245,166,35,0.28)',
     texture: 'radial-gradient(circle at 50% -10%, rgba(245,166,35,0.16), transparent 60%)', textureSize: 'auto' },
-  neon: { name: 'Neon Arcade', icon: '🌆', bg: '#0a0014', surface: '#160a28', surface2: '#1f0f3a', border: '#3a1f5c', amber: '#ff2bd6', amberDim: '#b81ea0', amberGlow: 'rgba(255,43,214,0.15)', teal: '#19f4ff', red: '#ff4d6d', text: '#f1e8ff', textDim: '#8a7aad',
+  neon: { key: 'neon', name: 'Neon Arcade', icon: '🕹️', actionLabel: 'ZAP!', bg: '#0a0014', surface: '#160a28', surface2: '#1f0f3a', border: '#3a1f5c', amber: '#ff2bd6', amberDim: '#b81ea0', amberGlow: 'rgba(255,43,214,0.15)', teal: '#19f4ff', red: '#ff4d6d', text: '#f1e8ff', textDim: '#8a7aad',
     font: "'Press Start 2P', cursive", fontMono: "'Space Mono', monospace", radius: 4, tracking: '0.02em', glow: '0 0 26px rgba(255,43,214,0.5)',
     texture: 'radial-gradient(circle at 15% 10%, rgba(255,43,214,0.16), transparent 50%), radial-gradient(circle at 85% 90%, rgba(25,244,255,0.14), transparent 50%)', textureSize: 'auto' },
-  royal: { name: 'Royal Court', icon: '👑', bg: '#1a1209', surface: '#2a1d10', surface2: '#3a2a16', border: '#5c4226', amber: '#d4af37', amberDim: '#9c7e26', amberGlow: 'rgba(212,175,55,0.15)', teal: '#7a9e7e', red: '#a83232', text: '#f3e9d2', textDim: '#a68a5c',
+  royal: { key: 'royal', name: 'Royal Court', icon: '👑', actionLabel: 'DECREE', bg: '#1a1209', surface: '#2a1d10', surface2: '#3a2a16', border: '#5c4226', amber: '#d4af37', amberDim: '#9c7e26', amberGlow: 'rgba(212,175,55,0.15)', teal: '#7a9e7e', red: '#a83232', text: '#f3e9d2', textDim: '#a68a5c',
     font: "'Cinzel', serif", fontMono: "'Playfair Display', serif", radius: 14, tracking: '0.04em', glow: '0 0 18px rgba(212,175,55,0.32)',
     texture: 'radial-gradient(circle at 50% 0%, rgba(212,175,55,0.14), transparent 55%)', textureSize: 'auto' },
-  space: { name: 'Deep Space', icon: '🪐', bg: '#070914', surface: '#10142a', surface2: '#171c3a', border: '#2a3262', amber: '#7c9bff', amberDim: '#5170c4', amberGlow: 'rgba(124,155,255,0.15)', teal: '#5ff0d7', red: '#ff5d8f', text: '#e6e9ff', textDim: '#6c74a8',
+  space: { key: 'space', name: 'Deep Space', icon: '🪐', actionLabel: 'LAUNCH', bg: '#070914', surface: '#10142a', surface2: '#171c3a', border: '#2a3262', amber: '#7c9bff', amberDim: '#5170c4', amberGlow: 'rgba(124,155,255,0.15)', teal: '#5ff0d7', red: '#ff5d8f', text: '#e6e9ff', textDim: '#6c74a8',
     font: "'Orbitron', sans-serif", fontMono: "'Space Mono', monospace", radius: 10, tracking: '0.05em', glow: '0 0 28px rgba(124,155,255,0.42)',
     texture: 'radial-gradient(1.5px 1.5px at 10% 20%, rgba(255,255,255,0.55) 50%, transparent 50%), radial-gradient(1.5px 1.5px at 80% 60%, rgba(255,255,255,0.45) 50%, transparent 50%), radial-gradient(1px 1px at 40% 80%, rgba(255,255,255,0.5) 50%, transparent 50%), radial-gradient(1.5px 1.5px at 60% 30%, rgba(255,255,255,0.4) 50%, transparent 50%), radial-gradient(1px 1px at 90% 10%, rgba(255,255,255,0.45) 50%, transparent 50%)', textureSize: '220px 220px' },
-  terminal: { name: 'Retro Terminal', icon: '🖥️', bg: '#040a04', surface: '#0a160a', surface2: '#0f1f0f', border: '#1f4a1f', amber: '#39ff6a', amberDim: '#1f9a3f', amberGlow: 'rgba(57,255,106,0.15)', teal: '#39ff6a', red: '#ff4444', text: '#c8ffcf', textDim: '#4a8a4a',
+  terminal: { key: 'terminal', name: 'Retro Terminal', icon: '🖥️', actionLabel: 'RUN', bg: '#040a04', surface: '#0a160a', surface2: '#0f1f0f', border: '#1f4a1f', amber: '#39ff6a', amberDim: '#1f9a3f', amberGlow: 'rgba(57,255,106,0.15)', teal: '#39ff6a', red: '#ff4444', text: '#c8ffcf', textDim: '#4a8a4a',
     font: "'VT323', monospace", fontMono: "'VT323', monospace", radius: 2, tracking: '0.02em', glow: '0 0 14px rgba(57,255,106,0.5)',
     texture: 'repeating-linear-gradient(0deg, rgba(57,255,106,0.06) 0px, rgba(57,255,106,0.06) 1px, transparent 1px, transparent 3px)', textureSize: 'auto' }
 };
@@ -284,6 +302,27 @@ function ArenaPicker({
   }))));
 }
 
+// ── LOGO MARK (per-arena flourish) ──
+function LogoMark() {
+  const flourish = S.key === 'royal' ? '❖' : null;
+  return /*#__PURE__*/React.createElement("span", {
+    style: { display: 'inline-flex', alignItems: 'center', gap: '0.25em' }
+  },
+  flourish && /*#__PURE__*/React.createElement("span", { style: { color: S.amber, fontSize: '0.55em' } }, flourish),
+  /*#__PURE__*/React.createElement("span", null,
+    "Word",
+    /*#__PURE__*/React.createElement("span", {
+      style: {
+        color: S.amber,
+        animation: S.key === 'neon' ? 'neonFlicker 2.4s infinite' : 'none'
+      }
+    }, "Forge"),
+    S.key === 'terminal' && /*#__PURE__*/React.createElement("span", { style: { color: S.amber, animation: 'blink 1s infinite' } }, "_"),
+    S.key === 'space' && /*#__PURE__*/React.createElement("span", { style: { color: S.teal, animation: 'blink 2.2s infinite', marginLeft: '0.2em' } }, "•")
+  ),
+  flourish && /*#__PURE__*/React.createElement("span", { style: { color: S.amber, fontSize: '0.55em' } }, flourish));
+}
+
 // ── TILE ──
 function Tile({
   ch,
@@ -387,11 +426,7 @@ function SetupScreen({
       marginBottom: 4,
       transition: 'font-family 0.2s'
     }
-  }, "Word", /*#__PURE__*/React.createElement("span", {
-    style: {
-      color: S.amber
-    }
-  }, "Forge")), /*#__PURE__*/React.createElement("p", {
+  }, /*#__PURE__*/React.createElement(LogoMark, null)), /*#__PURE__*/React.createElement("p", {
     style: {
       color: S.textDim,
       fontSize: '0.88rem',
@@ -460,7 +495,7 @@ function SetupScreen({
       color: S.textDim,
       lineHeight: 1.5
     }
-  }, "Player 1 goes first with a full timer, then Player 2 takes their turn. Any word Player 1 already found is locked out and scores zero for Player 2 — so finding words fast matters."))), /*#__PURE__*/React.createElement(ArenaPicker, {
+  }, "Player 1 goes first with a full timer. When their turn ends, the timer resets to the same amount of time for Player 2. Any word Player 1 already found is locked out and scores zero for Player 2 — so finding words fast matters."))), /*#__PURE__*/React.createElement(ArenaPicker, {
     themeKey: themeKey,
     onChange: onThemeChange
   }), [{
@@ -552,34 +587,81 @@ function MicButton({
   const [listening, setListening] = useState(false);
   const [supported] = useState(() => 'webkitSpeechRecognition' in window || 'SpeechRecognition' in window);
   const recRef = useRef(null);
+  // Tracks whether the user *wants* the mic on — lets us tell an intentional
+  // stop apart from the browser auto-ending continuous recognition after a
+  // pause, so we can silently restart and keep "always listening" going.
+  const shouldListenRef = useRef(false);
+
+  function startRecognition() {
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    const rec = new SR();
+    rec.lang = 'en-US';
+    rec.continuous = true;
+    rec.interimResults = false;
+    rec.maxAlternatives = 3;
+    rec.onresult = e => {
+      // Only look at newly-finalized results (resultIndex onward) so a long
+      // continuous session doesn't keep re-submitting earlier words.
+      for (let r = e.resultIndex; r < e.results.length; r++) {
+        const result = e.results[r];
+        if (!result.isFinal) continue;
+        for (let i = 0; i < result.length; i++) {
+          const t = result[i].transcript.trim().toUpperCase().replace(/[^A-Z]/g, '');
+          if (t.length >= 2) {
+            onWord(t);
+            break;
+          }
+        }
+      }
+    };
+    rec.onerror = e => {
+      if (e.error === 'not-allowed' || e.error === 'service-not-allowed') {
+        shouldListenRef.current = false;
+        setListening(false);
+      }
+      // Other errors (e.g. "no-speech") are transient — onend will fire next
+      // and silently restart if the mic is still toggled on.
+    };
+    rec.onend = () => {
+      if (shouldListenRef.current) {
+        // Browsers stop continuous recognition after a period of silence —
+        // restart automatically so the user never has to re-tap the icon.
+        setTimeout(() => {
+          if (shouldListenRef.current) startRecognition();
+        }, 200);
+      } else {
+        setListening(false);
+      }
+    };
+    recRef.current = rec;
+    try {
+      rec.start();
+      setListening(true);
+    } catch {
+      // start() can throw if called too soon after a previous instance —
+      // retry shortly if the mic is still meant to be on.
+      if (shouldListenRef.current) setTimeout(() => startRecognition(), 250);
+    }
+  }
+
   function toggleMic() {
     if (!supported) return;
-    if (listening) {
+    if (listening || shouldListenRef.current) {
+      shouldListenRef.current = false;
       recRef.current?.stop();
       setListening(false);
       return;
     }
-    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-    const rec = new SR();
-    rec.lang = 'en-US';
-    rec.interimResults = false;
-    rec.maxAlternatives = 3;
-    rec.onresult = e => {
-      // Try each alternative — pick the one that is purely alphabetic
-      for (let i = 0; i < e.results[0].length; i++) {
-        const t = e.results[0][i].transcript.trim().toUpperCase().replace(/[^A-Z]/g, '');
-        if (t.length >= 2) {
-          onWord(t);
-          break;
-        }
-      }
-    };
-    rec.onerror = () => setListening(false);
-    rec.onend = () => setListening(false);
-    recRef.current = rec;
-    rec.start();
-    setListening(true);
+    shouldListenRef.current = true;
+    startRecognition();
   }
+
+  useEffect(() => {
+    return () => {
+      shouldListenRef.current = false;
+      recRef.current?.stop();
+    };
+  }, []);
   if (!supported) return null;
   return /*#__PURE__*/React.createElement("button", {
     onClick: toggleMic,
@@ -676,6 +758,70 @@ function MicButton({
   })));
 }
 
+// ── CONDENSED MOBILE SCOREBOARD BANNER ──
+function MobileScoreBanner({
+  players,
+  currentPlayer,
+  timerStr,
+  urgent
+}) {
+  return /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 8,
+      padding: '8px 10px',
+      marginBottom: 8,
+      borderRadius: S.radius,
+      background: S.surface2,
+      border: `1px solid ${S.border}`
+    }
+  }, players.map((p, i) => /*#__PURE__*/React.createElement("div", {
+    key: i,
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 5,
+      flex: 1,
+      minWidth: 0,
+      opacity: currentPlayer === i + 1 ? 1 : 0.55
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      width: 6,
+      height: 6,
+      borderRadius: '50%',
+      background: currentPlayer === i + 1 ? S.amber : S.textDim,
+      flexShrink: 0
+    }
+  }), /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: '0.7rem',
+      color: S.textDim,
+      whiteSpace: 'nowrap',
+      overflow: 'hidden',
+      textOverflow: 'ellipsis',
+      maxWidth: 60
+    }
+  }, p.name), /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontFamily: S.fontMono,
+      fontWeight: 700,
+      fontSize: '0.95rem',
+      color: S.text
+    }
+  }, p.score))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontFamily: S.fontMono,
+      fontWeight: 700,
+      fontSize: '0.95rem',
+      color: urgent ? S.red : S.amber,
+      flexShrink: 0,
+      animation: urgent ? 'pulse 0.5s infinite alternate' : 'none'
+    }
+  }, timerStr));
+}
+
 // ── GAME ──
 function GameScreen({
   config,
@@ -689,6 +835,7 @@ function GameScreen({
     mode
   } = config;
   const letters = phrase.replace(/\s/g, '').split('');
+  const isMobile = useIsMobile();
   const [secsLeft, setSecsLeft] = useState(totalSecs);
   const [tilesVisible, setTilesVisible] = useState(false);
   const [wordInput, setWordInput] = useState('');
@@ -712,6 +859,7 @@ function GameScreen({
   const [popup, setPopup] = useState(null);
   const popupRef = useRef(null);
   const inputRef = useRef(null);
+  const checkingRef = useRef(false);
   const timerRef = useRef(null);
   const feedbackRef = useRef(null);
   const playersRef = useRef(players);
@@ -770,9 +918,14 @@ function GameScreen({
     showFeedback('Timer restarted!', 'ok');
   }
   async function submitWord(rawWord) {
+    if (checkingRef.current) return;
     const word = (rawWord || wordInput).trim().toUpperCase().replace(/[^A-Z]/g, '');
     setWordInput('');
-    inputRef.current?.focus();
+    // Defer refocus a tick so iOS doesn't fight the keyboard dismissal that
+    // can follow an Enter keypress / state update on the same input.
+    requestAnimationFrame(() => {
+      inputRef.current?.focus();
+    });
     if (word.length < 2) {
       showFeedback('Word must be at least 2 letters.', 'err');
       flash('err');
@@ -792,9 +945,11 @@ function GameScreen({
     }
 
     // Show "checking…" while API validates
+    checkingRef.current = true;
     setChecking(true);
     showFeedback(`Checking "${word}"…`, 'ok');
     const valid = await isValidWord(word);
+    checkingRef.current = false;
     setChecking(false);
     if (!valid) {
       showFeedback(`"${word}" isn't a valid English word.`, 'err');
@@ -884,6 +1039,11 @@ function GameScreen({
     }
   }, /*#__PURE__*/React.createElement(WordPopup, {
     popup: popup
+  }), isMobile && /*#__PURE__*/React.createElement(MobileScoreBanner, {
+    players: players,
+    currentPlayer: currentPlayer,
+    timerStr: timerStr,
+    urgent: urgent
   }), mode === 'async' && /*#__PURE__*/React.createElement("div", {
     style: {
       display: 'inline-flex',
@@ -910,7 +1070,7 @@ function GameScreen({
   }), players[cpIdx].name, "'s Turn"), /*#__PURE__*/React.createElement("div", {
     style: {
       display: 'grid',
-      gridTemplateColumns: '1fr 290px',
+      gridTemplateColumns: isMobile ? '1fr' : '1fr 290px',
       gap: 16
     }
   }, /*#__PURE__*/React.createElement("div", {
@@ -924,7 +1084,10 @@ function GameScreen({
       background: S.surface,
       border: `1px solid ${S.border}`,
       borderRadius: S.radius + 4,
-      padding: 20
+      padding: 20,
+      position: isMobile ? 'sticky' : 'static',
+      top: isMobile ? 0 : 'auto',
+      zIndex: isMobile ? 5 : 'auto'
     }
   }, /*#__PURE__*/React.createElement("div", {
     style: {
@@ -987,9 +1150,17 @@ function GameScreen({
     ref: inputRef,
     value: wordInput,
     onChange: e => setWordInput(e.target.value.toUpperCase()),
-    onKeyDown: e => e.key === 'Enter' && !checking && submitWord(),
+    onKeyDown: e => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        if (!checking) submitWord();
+      }
+    },
     placeholder: "TYPE OR SPEAK A WORD…",
-    disabled: checking,
+    autoComplete: "off",
+    autoCorrect: "off",
+    autoCapitalize: "characters",
+    enterKeyHint: "go",
     style: {
       flex: 1,
       background: S.surface2,
@@ -1026,13 +1197,13 @@ function GameScreen({
       boxShadow: S.glow,
       transition: 'font-family 0.2s, border-radius 0.2s, box-shadow 0.3s'
     }
-  }, "FORGE")), 'webkitSpeechRecognition' in window || 'SpeechRecognition' in window ? /*#__PURE__*/React.createElement("div", {
+  }, S.actionLabel || 'FORGE')), 'webkitSpeechRecognition' in window || 'SpeechRecognition' in window ? /*#__PURE__*/React.createElement("div", {
     style: {
       fontSize: '0.72rem',
       color: S.textDim,
       marginBottom: 6
     }
-  }, "🎙 Tap the mic and say a word — it auto-submits when heard") : null, /*#__PURE__*/React.createElement("div", {
+  }, "🎙 Tap the mic to start — it keeps listening, so just keep saying words. Tap again to stop.") : null, /*#__PURE__*/React.createElement("div", {
     style: {
       height: 20,
       fontSize: '0.82rem',
@@ -1263,7 +1434,6 @@ function GameScreen({
   }, "End Round"))), /*#__PURE__*/React.createElement("style", null, `
         @keyframes pulse { from{opacity:1} to{opacity:0.45} }
         @keyframes shake { 0%,100%{transform:translateX(0)} 25%{transform:translateX(-5px)} 75%{transform:translateX(5px)} }
-        @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.2} }
         @keyframes micPulse { from{box-shadow:0 0 0 0 rgba(245,166,35,0.4)} to{box-shadow:0 0 0 6px rgba(245,166,35,0)} }
         @keyframes popIn { from { opacity:0; transform: translate(-50%,-50%) scale(0.7); } to { opacity:1; transform: translate(-50%,-50%) scale(1); } }
         @keyframes popOut { from { opacity:1; } to { opacity:0; transform: translate(-50%,-62%) scale(0.92); } }
@@ -1415,11 +1585,7 @@ function WordForge() {
       fontWeight: 700,
       transition: 'font-family 0.2s'
     }
-  }, "Word", /*#__PURE__*/React.createElement("span", {
-    style: {
-      color: S.amber
-    }
-  }, "Forge")), /*#__PURE__*/React.createElement("button", {
+  }, /*#__PURE__*/React.createElement(LogoMark, null)), /*#__PURE__*/React.createElement("button", {
     onClick: () => setScreen('setup'),
     style: {
       background: 'transparent',
