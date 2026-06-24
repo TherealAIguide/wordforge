@@ -102,6 +102,30 @@ async function endRoom(code) {
   await db.collection('rooms').doc(code).update({ status: 'ended' }).catch(() => {});
 }
 
+async function pauseRoom(code) {
+  if (!db) return;
+  await db.collection('rooms').doc(code).update({
+    paused: true,
+    pausedAt: firebase.firestore.FieldValue.serverTimestamp()
+  });
+}
+
+async function resumeRoom(code) {
+  if (!db) return;
+  const ref = db.collection('rooms').doc(code);
+  const snap = await ref.get();
+  const data = snap.data();
+  if (!data || !data.paused) return;
+  const pausedAtMs = data.pausedAt && data.pausedAt.toMillis ? data.pausedAt.toMillis() : Date.now();
+  const startMs = data.startTime && data.startTime.toMillis ? data.startTime.toMillis() : Date.now();
+  const pauseDurationMs = Date.now() - pausedAtMs;
+  await ref.update({
+    paused: false,
+    pausedAt: null,
+    startTime: firebase.firestore.Timestamp.fromMillis(startMs + pauseDurationMs)
+  });
+}
+
 // ── RESPONSIVE HELPER ──
 function useIsMobile(breakpoint = 720) {
   const [isMobile, setIsMobile] = useState(() => typeof window !== 'undefined' && window.innerWidth <= breakpoint);
@@ -460,7 +484,7 @@ function OnlineSetup({ onStart }) {
     };
   }, []);
 
-  function subscribe(code) {
+  function subscribe(code, num) {
     if (unsubRef.current) unsubRef.current();
     unsubRef.current = listenToRoom(code, data => {
       setRoom(data);
@@ -473,7 +497,7 @@ function OnlineSetup({ onStart }) {
           totalSecs: data.totalSecs,
           mode: 'online',
           roomCode: code,
-          myPlayerNum,
+          myPlayerNum: num,
           p1Name: p1 ? p1.name : 'Player 1',
           p2Name: p2 ? p2.name : 'Player 2'
         });
@@ -497,7 +521,7 @@ function OnlineSetup({ onStart }) {
       const code = await createRoom({ phrase: clean, totalSecs: parseInt(time), yourName: yourName.trim() });
       setRoomCode(code);
       setMyPlayerNum(1);
-      subscribe(code);
+      subscribe(code, 1);
     } catch (e) {
       setErr(e.message || 'Could not create the room.');
     }
@@ -519,7 +543,7 @@ function OnlineSetup({ onStart }) {
       const code = await joinRoom(joinCode, yourName.trim());
       setRoomCode(code);
       setMyPlayerNum(2);
-      subscribe(code);
+      subscribe(code, 2);
     } catch (e) {
       setErr(e.message || 'Could not join that room.');
     }
@@ -1753,6 +1777,8 @@ function OnlineGameScreen({ config, onEnd }) {
   const [opponent, setOpponent] = useState({ name: opponentNum === 1 ? p1Name : p2Name, score: 0, words: [] });
   const [connErr, setConnErr] = useState('');
   const [popup, setPopup] = useState(null);
+  const [paused, setPaused] = useState(false);
+  const [pauseBusy, setPauseBusy] = useState(false);
 
   const popupRef = useRef(null);
   const inputRef = useRef(null);
@@ -1763,6 +1789,7 @@ function OnlineGameScreen({ config, onEnd }) {
   const tickRef = useRef(null);
   const endedRef = useRef(false);
   const hitZeroRef = useRef(false);
+  const pausedRef = useRef(false);
 
   useEffect(() => {
     setTimeout(() => setTilesVisible(true), 80);
@@ -1773,9 +1800,11 @@ function OnlineGameScreen({ config, onEnd }) {
     const unsub = listenToRoom(roomCode, data => {
       const opp = data.players ? data.players[String(opponentNum)] : null;
       if (opp) setOpponent({ name: opp.name, score: opp.score || 0, words: opp.words || [] });
-      if (data.startTime && !startTimeMsRef.current) {
+      if (data.startTime) {
         startTimeMsRef.current = data.startTime.toMillis ? data.startTime.toMillis() : Date.now();
       }
+      pausedRef.current = !!data.paused;
+      setPaused(!!data.paused);
       if (data.status === 'ended' && !endedRef.current) {
         endedRef.current = true;
         clearInterval(tickRef.current);
@@ -1789,7 +1818,7 @@ function OnlineGameScreen({ config, onEnd }) {
 
   useEffect(() => {
     tickRef.current = setInterval(() => {
-      if (!startTimeMsRef.current) return;
+      if (!startTimeMsRef.current || pausedRef.current) return;
       const elapsed = Math.floor((Date.now() - startTimeMsRef.current) / 1000);
       const left = Math.max(0, totalSecs - elapsed);
       setSecsLeft(left);
@@ -1800,6 +1829,17 @@ function OnlineGameScreen({ config, onEnd }) {
     }, 250);
     return () => clearInterval(tickRef.current);
   }, []);
+
+  async function togglePause() {
+    setPauseBusy(true);
+    try {
+      if (pausedRef.current) await resumeRoom(roomCode);
+      else await pauseRoom(roomCode);
+    } catch (e) {
+      setConnErr('Could not update pause state — try again.');
+    }
+    setPauseBusy(false);
+  }
 
   function showFeedback(msg, type) {
     setFeedback({ msg, type });
@@ -1813,6 +1853,10 @@ function OnlineGameScreen({ config, onEnd }) {
 
   async function submitWord(rawWord) {
     if (checkingRef.current) return;
+    if (pausedRef.current) {
+      showFeedback('Game is paused.', 'err');
+      return;
+    }
     const word = (rawWord || wordInput).trim().toUpperCase().replace(/[^A-Z]/g, '');
     setWordInput('');
     requestAnimationFrame(() => inputRef.current?.focus());
@@ -1880,13 +1924,31 @@ function OnlineGameScreen({ config, onEnd }) {
 
   return /*#__PURE__*/React.createElement("div", { style: { width: '100%', maxWidth: 900 } },
     /*#__PURE__*/React.createElement(WordPopup, { popup: popup }),
-    /*#__PURE__*/React.createElement("div", {
+    /*#__PURE__*/React.createElement("div", { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 10, marginBottom: 14 } },
+      /*#__PURE__*/React.createElement("div", {
+        style: {
+          display: 'inline-flex', alignItems: 'center', gap: 7, background: S.amberGlow,
+          border: `1px solid ${S.amberDim}`, borderRadius: 99, padding: '4px 14px',
+          fontSize: '0.78rem', fontWeight: 600, color: S.amber
+        }
+      }, "🌐 Online · Room ", roomCode, " · ", myName, " vs ", opponent.name),
+      /*#__PURE__*/React.createElement("button", {
+        onClick: togglePause, disabled: pauseBusy,
+        style: {
+          padding: '6px 16px', borderRadius: 99, border: `1px solid ${S.border}`,
+          background: paused ? S.amber : S.surface2, color: paused ? '#0d0f14' : S.text,
+          fontFamily: S.font, fontWeight: 700, fontSize: '0.78rem',
+          cursor: pauseBusy ? 'not-allowed' : 'pointer', opacity: pauseBusy ? 0.6 : 1
+        }
+      }, paused ? '▶ Resume' : '⏸ Pause')
+    ),
+    paused && /*#__PURE__*/React.createElement("div", {
       style: {
-        display: 'inline-flex', alignItems: 'center', gap: 7, background: S.amberGlow,
-        border: `1px solid ${S.amberDim}`, borderRadius: 99, padding: '4px 14px',
-        fontSize: '0.78rem', fontWeight: 600, color: S.amber, marginBottom: 14
+        background: S.amberGlow, border: `1px solid ${S.amberDim}`, borderRadius: S.radius,
+        padding: '10px 16px', marginBottom: 14, textAlign: 'center', fontWeight: 700,
+        color: S.amber, fontFamily: S.font, letterSpacing: S.tracking
       }
-    }, "🌐 Online · Room ", roomCode, " · ", myName, " vs ", opponent.name),
+    }, "⏸ PAUSED — either player can resume"),
     connErr && /*#__PURE__*/React.createElement("div", { style: { fontSize: '0.75rem', color: S.red, marginBottom: 10 } }, connErr),
     /*#__PURE__*/React.createElement("div", { style: { display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 290px', gap: 16 } },
       /*#__PURE__*/React.createElement("div", { style: { display: 'flex', flexDirection: 'column', gap: 14 } },
@@ -1904,14 +1966,14 @@ function OnlineGameScreen({ config, onEnd }) {
           /*#__PURE__*/React.createElement("div", { style: { display: 'flex', gap: 8, marginBottom: 10 } },
             /*#__PURE__*/React.createElement("input", {
               ref: inputRef, value: wordInput, onChange: e => setWordInput(e.target.value.toUpperCase()),
-              onKeyDown: e => { if (e.key === 'Enter') { e.preventDefault(); if (!checking) submitWord(); } },
-              placeholder: "TYPE OR SPEAK A WORD…", autoComplete: "off", autoCorrect: "off", autoCapitalize: "characters", enterKeyHint: "go",
-              style: { flex: 1, background: S.surface2, border: `1.5px solid ${inputBorder}`, borderRadius: S.radius, color: S.text, fontFamily: S.fontMono, fontSize: '1.05rem', fontWeight: 700, padding: '10px 14px', letterSpacing: '0.08em', outline: 'none', animation: inputState === 'err' ? 'shake 0.3s' : 'none', transition: 'border-color 0.15s', opacity: checking ? 0.6 : 1 }
+              onKeyDown: e => { if (e.key === 'Enter') { e.preventDefault(); if (!checking && !paused) submitWord(); } },
+              placeholder: paused ? "PAUSED…" : "TYPE OR SPEAK A WORD…", autoComplete: "off", autoCorrect: "off", autoCapitalize: "characters", enterKeyHint: "go", disabled: paused,
+              style: { flex: 1, background: S.surface2, border: `1.5px solid ${inputBorder}`, borderRadius: S.radius, color: S.text, fontFamily: S.fontMono, fontSize: '1.05rem', fontWeight: 700, padding: '10px 14px', letterSpacing: '0.08em', outline: 'none', animation: inputState === 'err' ? 'shake 0.3s' : 'none', transition: 'border-color 0.15s', opacity: checking || paused ? 0.6 : 1 }
             }),
-            /*#__PURE__*/React.createElement(MicButton, { onWord: w => submitWord(w), disabled: checking }),
+            /*#__PURE__*/React.createElement(MicButton, { onWord: w => submitWord(w), disabled: checking || paused }),
             /*#__PURE__*/React.createElement("button", {
-              onClick: () => !checking && submitWord(), disabled: checking,
-              style: { padding: '10px 18px', background: S.amber, border: 'none', borderRadius: S.radius, color: '#0d0f14', fontFamily: S.font, fontWeight: 700, fontSize: '0.9rem', cursor: checking ? 'not-allowed' : 'pointer', opacity: checking ? 0.6 : 1, boxShadow: S.glow }
+              onClick: () => !checking && !paused && submitWord(), disabled: checking || paused,
+              style: { padding: '10px 18px', background: S.amber, border: 'none', borderRadius: S.radius, color: '#0d0f14', fontFamily: S.font, fontWeight: 700, fontSize: '0.9rem', cursor: checking || paused ? 'not-allowed' : 'pointer', opacity: checking || paused ? 0.6 : 1, boxShadow: S.glow }
             }, S.actionLabel || 'FORGE')
           ),
           /*#__PURE__*/React.createElement("div", { style: { height: 20, fontSize: '0.82rem', fontWeight: 500, color: feedback.type === 'ok' ? S.teal : S.red } }, feedback.msg)
