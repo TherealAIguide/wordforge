@@ -13,6 +13,8 @@
 </style>
 <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
 <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
 </head>
 <body>
 <div id="root"></div>
@@ -23,6 +25,82 @@ const {
   useRef,
   useCallback
 } = React;
+
+// ── FIREBASE (cross-device online mode) ──
+const firebaseConfig = {
+  apiKey: "AIzaSyC7z-AH0JDs6ULp6XX6DSlqNwMMwNE5Eh0",
+  authDomain: "wordforge-8030c.firebaseapp.com",
+  projectId: "wordforge-8030c",
+  storageBucket: "wordforge-8030c.firebasestorage.app",
+  messagingSenderId: "420384102674",
+  appId: "1:420384102674:web:4b207693052de670877bcb"
+};
+let db = null;
+try {
+  firebase.initializeApp(firebaseConfig);
+  db = firebase.firestore();
+} catch (e) {
+  console.error('Firebase init failed — online mode will be unavailable.', e);
+}
+
+function genRoomCode() {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // no O/0/I/1, avoids confusion
+  let code = '';
+  for (let i = 0; i < 4; i++) code += chars[Math.floor(Math.random() * chars.length)];
+  return code;
+}
+
+async function createRoom({ phrase, totalSecs, yourName }) {
+  if (!db) throw new Error('Online mode is unavailable right now.');
+  const code = genRoomCode();
+  await db.collection('rooms').doc(code).set({
+    phrase,
+    totalSecs,
+    players: { 1: { name: yourName, score: 0, words: [] }, 2: null },
+    status: 'waiting',
+    createdAt: firebase.firestore.FieldValue.serverTimestamp()
+  });
+  return code;
+}
+
+async function joinRoom(code, yourName) {
+  if (!db) throw new Error('Online mode is unavailable right now.');
+  const ref = db.collection('rooms').doc(code.toUpperCase().trim());
+  const snap = await ref.get();
+  if (!snap.exists) throw new Error('Room not found. Double-check the code.');
+  const data = snap.data();
+  if (data.players && data.players['2']) throw new Error('That room is already full.');
+  if (data.status !== 'waiting') throw new Error('That round has already started.');
+  await ref.update({ 'players.2': { name: yourName, score: 0, words: [] } });
+  return code.toUpperCase().trim();
+}
+
+function listenToRoom(code, cb) {
+  if (!db) return () => {};
+  return db.collection('rooms').doc(code).onSnapshot(snap => {
+    if (snap.exists) cb(snap.data());
+  }, err => console.error('Room listener error', err));
+}
+
+async function startRoom(code) {
+  await db.collection('rooms').doc(code).update({
+    status: 'active',
+    startTime: firebase.firestore.FieldValue.serverTimestamp()
+  });
+}
+
+async function submitMyProgress(code, myPlayerNum, score, words) {
+  if (!db) return;
+  await db.collection('rooms').doc(code).update({
+    [`players.${myPlayerNum}.score`]: score,
+    [`players.${myPlayerNum}.words`]: words
+  });
+}
+
+async function endRoom(code) {
+  if (!db) return;
+  await db.collection('rooms').doc(code).update({ status: 'ended' }).catch(() => {});
+}
 
 // ── RESPONSIVE HELPER ──
 function useIsMobile(breakpoint = 720) {
@@ -361,6 +439,206 @@ function Tile({
   }, LV[ch] || 0));
 }
 
+// ── ONLINE LOBBY (cross-device create/join room) ──
+function OnlineSetup({ onStart }) {
+  const [tab, setTab] = useState('create');
+  const [phrase, setPhrase] = useState('');
+  const [time, setTime] = useState('120');
+  const [yourName, setYourName] = useState('');
+  const [joinCode, setJoinCode] = useState('');
+  const [roomCode, setRoomCode] = useState(null);
+  const [myPlayerNum, setMyPlayerNum] = useState(null);
+  const [room, setRoom] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+  const startedRef = useRef(false);
+  const unsubRef = useRef(null);
+
+  useEffect(() => {
+    return () => {
+      if (unsubRef.current) unsubRef.current();
+    };
+  }, []);
+
+  function subscribe(code) {
+    if (unsubRef.current) unsubRef.current();
+    unsubRef.current = listenToRoom(code, data => {
+      setRoom(data);
+      if (data.status === 'active' && !startedRef.current) {
+        startedRef.current = true;
+        const p1 = data.players['1'];
+        const p2 = data.players['2'];
+        onStart({
+          phrase: data.phrase,
+          totalSecs: data.totalSecs,
+          mode: 'online',
+          roomCode: code,
+          myPlayerNum,
+          p1Name: p1 ? p1.name : 'Player 1',
+          p2Name: p2 ? p2.name : 'Player 2'
+        });
+      }
+    });
+  }
+
+  async function doCreate() {
+    const clean = phrase.trim().toUpperCase();
+    if (!clean || clean.replace(/\s/g, '').length < 3) {
+      setErr('Enter a word or phrase with at least 3 letters.');
+      return;
+    }
+    if (!yourName.trim()) {
+      setErr('Enter your name.');
+      return;
+    }
+    setErr('');
+    setBusy(true);
+    try {
+      const code = await createRoom({ phrase: clean, totalSecs: parseInt(time), yourName: yourName.trim() });
+      setRoomCode(code);
+      setMyPlayerNum(1);
+      subscribe(code);
+    } catch (e) {
+      setErr(e.message || 'Could not create the room.');
+    }
+    setBusy(false);
+  }
+
+  async function doJoin() {
+    if (!joinCode.trim()) {
+      setErr('Enter the room code.');
+      return;
+    }
+    if (!yourName.trim()) {
+      setErr('Enter your name.');
+      return;
+    }
+    setErr('');
+    setBusy(true);
+    try {
+      const code = await joinRoom(joinCode, yourName.trim());
+      setRoomCode(code);
+      setMyPlayerNum(2);
+      subscribe(code);
+    } catch (e) {
+      setErr(e.message || 'Could not join that room.');
+    }
+    setBusy(false);
+  }
+
+  async function doStart() {
+    setBusy(true);
+    try {
+      await startRoom(roomCode);
+    } catch (e) {
+      setErr(e.message || 'Could not start the round.');
+    }
+    setBusy(false);
+  }
+
+  const inputStyle = {
+    width: '100%',
+    background: S.surface2,
+    border: `1px solid ${S.border}`,
+    borderRadius: S.radius,
+    color: S.text,
+    fontFamily: S.fontMono,
+    fontSize: '1rem',
+    padding: '10px 14px',
+    outline: 'none'
+  };
+  const labelStyle = {
+    display: 'block',
+    fontSize: '0.75rem',
+    fontWeight: 600,
+    color: S.textDim,
+    letterSpacing: S.tracking,
+    textTransform: 'uppercase',
+    marginBottom: 6,
+    fontFamily: S.font
+  };
+
+  // Already in a room — show the waiting/lobby panel
+  if (roomCode) {
+    const p2 = room && room.players ? room.players['2'] : null;
+    const p1 = room && room.players ? room.players['1'] : null;
+    return /*#__PURE__*/React.createElement("div", {
+      style: { background: S.surface2, border: `1px solid ${S.border}`, borderRadius: S.radius + 4, padding: 20, textAlign: 'center' }
+    },
+    /*#__PURE__*/React.createElement("div", { style: { fontSize: '0.78rem', color: S.textDim, marginBottom: 6, fontFamily: S.font } }, "ROOM CODE"),
+    /*#__PURE__*/React.createElement("div", { style: { fontFamily: S.fontMono, fontSize: '2.2rem', fontWeight: 700, letterSpacing: '0.15em', color: S.amber, marginBottom: 10 } }, roomCode),
+    myPlayerNum === 1 ?
+      /*#__PURE__*/React.createElement("div", { style: { fontSize: '0.82rem', color: S.textDim, marginBottom: 16 } }, "Share this code with your opponent so they can join.") :
+      /*#__PURE__*/React.createElement("div", { style: { fontSize: '0.82rem', color: S.textDim, marginBottom: 16 } }, "Waiting for ", (p1 ? p1.name : 'the host'), " to start the round…"),
+    /*#__PURE__*/React.createElement("div", { style: { display: 'flex', justifyContent: 'center', gap: 16, marginBottom: 16 } },
+      /*#__PURE__*/React.createElement("div", { style: { fontSize: '0.85rem', color: S.text } }, "👤 ", p1 ? p1.name : '—'),
+      /*#__PURE__*/React.createElement("div", { style: { fontSize: '0.85rem', color: p2 ? S.teal : S.textDim } }, "👤 ", p2 ? p2.name : 'waiting…')
+    ),
+    myPlayerNum === 1 && /*#__PURE__*/React.createElement("button", {
+      onClick: doStart,
+      disabled: !p2 || busy,
+      style: {
+        width: '100%', padding: '13px 0', borderRadius: S.radius + 1, border: 'none',
+        background: p2 ? S.amber : S.border, color: p2 ? '#0d0f14' : S.textDim,
+        fontFamily: S.font, fontSize: '0.95rem', fontWeight: 700,
+        cursor: p2 ? 'pointer' : 'not-allowed'
+      }
+    }, p2 ? 'Start Round →' : 'Waiting for opponent…'),
+    err && /*#__PURE__*/React.createElement("p", { style: { color: S.red, fontSize: '0.82rem', marginTop: 10 } }, err));
+  }
+
+  return /*#__PURE__*/React.createElement("div", null,
+    /*#__PURE__*/React.createElement("div", { style: { display: 'flex', gap: 8, marginBottom: 16, justifyContent: 'center' } },
+      ['create', 'join'].map(t => /*#__PURE__*/React.createElement("button", {
+        key: t,
+        onClick: () => { setTab(t); setErr(''); },
+        style: {
+          padding: '7px 18px', borderRadius: S.radius, border: `1px solid ${tab === t ? S.amber : S.border}`,
+          background: tab === t ? S.amber : 'transparent', color: tab === t ? '#0d0f14' : S.textDim,
+          fontFamily: S.font, fontWeight: 600, fontSize: '0.8rem', cursor: 'pointer'
+        }
+      }, t === 'create' ? 'Create Room' : 'Join Room'))
+    ),
+    tab === 'create' ? /*#__PURE__*/React.createElement(React.Fragment, null,
+      /*#__PURE__*/React.createElement("div", { style: { marginBottom: 12, textAlign: 'left' } },
+        /*#__PURE__*/React.createElement("label", { style: labelStyle }, "Source Word / Phrase"),
+        /*#__PURE__*/React.createElement("input", { value: phrase, onChange: e => setPhrase(e.target.value), placeholder: "e.g. INFORMATION", maxLength: 30, style: inputStyle })
+      ),
+      /*#__PURE__*/React.createElement("div", { style: { marginBottom: 12, textAlign: 'left' } },
+        /*#__PURE__*/React.createElement("label", { style: labelStyle }, "Time Limit"),
+        /*#__PURE__*/React.createElement("select", { value: time, onChange: e => setTime(e.target.value), style: inputStyle },
+          /*#__PURE__*/React.createElement("option", { value: "60" }, "1 minute"),
+          /*#__PURE__*/React.createElement("option", { value: "120" }, "2 minutes"),
+          /*#__PURE__*/React.createElement("option", { value: "180" }, "3 minutes")
+        )
+      ),
+      /*#__PURE__*/React.createElement("div", { style: { marginBottom: 16, textAlign: 'left' } },
+        /*#__PURE__*/React.createElement("label", { style: labelStyle }, "Your Name"),
+        /*#__PURE__*/React.createElement("input", { value: yourName, onChange: e => setYourName(e.target.value), placeholder: "Player 1", style: inputStyle })
+      ),
+      err && /*#__PURE__*/React.createElement("p", { style: { color: S.red, fontSize: '0.82rem', marginBottom: 10 } }, err),
+      /*#__PURE__*/React.createElement("button", {
+        onClick: doCreate, disabled: busy,
+        style: { width: '100%', padding: '13px 0', borderRadius: S.radius + 1, border: 'none', background: S.amber, color: '#0d0f14', fontFamily: S.font, fontSize: '0.95rem', fontWeight: 700, cursor: busy ? 'not-allowed' : 'pointer', opacity: busy ? 0.6 : 1 }
+      }, busy ? 'Creating…' : 'Create Room →')
+    ) : /*#__PURE__*/React.createElement(React.Fragment, null,
+      /*#__PURE__*/React.createElement("div", { style: { marginBottom: 12, textAlign: 'left' } },
+        /*#__PURE__*/React.createElement("label", { style: labelStyle }, "Room Code"),
+        /*#__PURE__*/React.createElement("input", { value: joinCode, onChange: e => setJoinCode(e.target.value.toUpperCase()), placeholder: "e.g. KX7M", maxLength: 6, style: { ...inputStyle, textTransform: 'uppercase', letterSpacing: '0.15em' } })
+      ),
+      /*#__PURE__*/React.createElement("div", { style: { marginBottom: 16, textAlign: 'left' } },
+        /*#__PURE__*/React.createElement("label", { style: labelStyle }, "Your Name"),
+        /*#__PURE__*/React.createElement("input", { value: yourName, onChange: e => setYourName(e.target.value), placeholder: "Player 2", style: inputStyle })
+      ),
+      err && /*#__PURE__*/React.createElement("p", { style: { color: S.red, fontSize: '0.82rem', marginBottom: 10 } }, err),
+      /*#__PURE__*/React.createElement("button", {
+        onClick: doJoin, disabled: busy,
+        style: { width: '100%', padding: '13px 0', borderRadius: S.radius + 1, border: 'none', background: S.amber, color: '#0d0f14', fontFamily: S.font, fontSize: '0.95rem', fontWeight: 700, cursor: busy ? 'not-allowed' : 'pointer', opacity: busy ? 0.6 : 1 }
+      }, busy ? 'Joining…' : 'Join Room →')
+    )
+  );
+}
+
 // ── SETUP ──
 function SetupScreen({
   onStart,
@@ -439,7 +717,7 @@ function SetupScreen({
       marginBottom: 12,
       justifyContent: 'center'
     }
-  }, ['sync', 'async'].map(m => /*#__PURE__*/React.createElement("button", {
+  }, ['sync', 'async', 'online'].map(m => /*#__PURE__*/React.createElement("button", {
     key: m,
     onClick: () => setMode(m),
     style: {
@@ -454,7 +732,7 @@ function SetupScreen({
       cursor: 'pointer',
       transition: 'font-family 0.2s, border-radius 0.2s'
     }
-  }, m === 'sync' ? '⚡ Sync' : '⏱ Async'))), /*#__PURE__*/React.createElement("div", {
+  }, m === 'sync' ? '⚡ Sync' : m === 'async' ? '⏱ Async' : '🌐 Online'))), /*#__PURE__*/React.createElement("div", {
     style: {
       background: S.surface2,
       border: `1px solid ${S.border}`,
@@ -479,7 +757,7 @@ function SetupScreen({
       color: S.textDim,
       lineHeight: 1.5
     }
-  }, "Both players play at the same time on the same screen. Pass a device back and forth, or play side-by-side on the honor system. Whoever scores more before the timer runs out wins.")) : /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+  }, "Both players play at the same time on the same screen. Pass a device back and forth, or play side-by-side on the honor system. Whoever scores more before the timer runs out wins.")) : mode === 'async' ? /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
     style: {
       fontSize: '0.78rem',
       fontWeight: 700,
@@ -495,10 +773,26 @@ function SetupScreen({
       color: S.textDim,
       lineHeight: 1.5
     }
-  }, "Player 1 goes first with a full timer. When their turn ends, the timer resets to the same amount of time for Player 2. Any word Player 1 already found is locked out and scores zero for Player 2 — so finding words fast matters."))), /*#__PURE__*/React.createElement(ArenaPicker, {
+  }, "Player 1 goes first with a full timer. When their turn ends, the timer resets to the same amount of time for Player 2. Any word Player 1 already found is locked out and scores zero for Player 2 — so finding words fast matters.")) : /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: '0.78rem',
+      fontWeight: 700,
+      color: S.amber,
+      marginBottom: 3,
+      fontFamily: S.font,
+      letterSpacing: S.tracking,
+      transition: 'font-family 0.2s'
+    }
+  }, "🌐 Play From Two Devices"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: '0.8rem',
+      color: S.textDim,
+      lineHeight: 1.5
+    }
+  }, "One player creates a room and shares the code. The other joins from their own phone or computer. Both play the same phrase at the same time, and scores sync live between devices."))), /*#__PURE__*/React.createElement(ArenaPicker, {
     themeKey: themeKey,
     onChange: onThemeChange
-  }), [{
+  }), mode === 'online' ? /*#__PURE__*/React.createElement(OnlineSetup, { onStart: onStart }) : /*#__PURE__*/React.createElement(React.Fragment, null, [{
     label: 'Source Word / Phrase',
     val: phrase,
     set: setPhrase,
@@ -576,7 +870,7 @@ function SetupScreen({
       boxShadow: S.glow,
       transition: 'font-family 0.2s, border-radius 0.2s, box-shadow 0.3s'
     }
-  }, "Start Round →"));
+  }, "Start Round →")));
 }
 
 // ── MIC BUTTON ──
@@ -1440,6 +1734,234 @@ function GameScreen({
       `));
 }
 
+// ── ONLINE GAME (cross-device, real-time via Firestore) ──
+function OnlineGameScreen({ config, onEnd }) {
+  const { phrase, totalSecs, roomCode, myPlayerNum, p1Name, p2Name } = config;
+  const letters = phrase.replace(/\s/g, '').split('');
+  const isMobile = useIsMobile();
+  const opponentNum = myPlayerNum === 1 ? 2 : 1;
+  const myName = myPlayerNum === 1 ? p1Name : p2Name;
+
+  const [secsLeft, setSecsLeft] = useState(totalSecs);
+  const [tilesVisible, setTilesVisible] = useState(false);
+  const [wordInput, setWordInput] = useState('');
+  const [inputState, setInputState] = useState('idle');
+  const [feedback, setFeedback] = useState({ msg: '', type: '' });
+  const [checking, setChecking] = useState(false);
+  const [myScore, setMyScore] = useState(0);
+  const [myWords, setMyWords] = useState([]);
+  const [opponent, setOpponent] = useState({ name: opponentNum === 1 ? p1Name : p2Name, score: 0, words: [] });
+  const [connErr, setConnErr] = useState('');
+  const [popup, setPopup] = useState(null);
+
+  const popupRef = useRef(null);
+  const inputRef = useRef(null);
+  const checkingRef = useRef(false);
+  const feedbackRef = useRef(null);
+  const myWordsRef = useRef([]);
+  const startTimeMsRef = useRef(null);
+  const tickRef = useRef(null);
+  const endedRef = useRef(false);
+  const hitZeroRef = useRef(false);
+
+  useEffect(() => {
+    setTimeout(() => setTilesVisible(true), 80);
+    inputRef.current?.focus();
+  }, []);
+
+  useEffect(() => {
+    const unsub = listenToRoom(roomCode, data => {
+      const opp = data.players ? data.players[String(opponentNum)] : null;
+      if (opp) setOpponent({ name: opp.name, score: opp.score || 0, words: opp.words || [] });
+      if (data.startTime && !startTimeMsRef.current) {
+        startTimeMsRef.current = data.startTime.toMillis ? data.startTime.toMillis() : Date.now();
+      }
+      if (data.status === 'ended' && !endedRef.current) {
+        endedRef.current = true;
+        clearInterval(tickRef.current);
+        const p1 = data.players['1'] || { name: p1Name, score: 0, words: [] };
+        const p2 = data.players['2'] || { name: p2Name, score: 0, words: [] };
+        onEnd([p1, p2]);
+      }
+    });
+    return () => unsub();
+  }, []);
+
+  useEffect(() => {
+    tickRef.current = setInterval(() => {
+      if (!startTimeMsRef.current) return;
+      const elapsed = Math.floor((Date.now() - startTimeMsRef.current) / 1000);
+      const left = Math.max(0, totalSecs - elapsed);
+      setSecsLeft(left);
+      if (left === 0 && !hitZeroRef.current) {
+        hitZeroRef.current = true;
+        endRoom(roomCode);
+      }
+    }, 250);
+    return () => clearInterval(tickRef.current);
+  }, []);
+
+  function showFeedback(msg, type) {
+    setFeedback({ msg, type });
+    clearTimeout(feedbackRef.current);
+    feedbackRef.current = setTimeout(() => setFeedback({ msg: '', type: '' }), 2800);
+  }
+  function flash(type) {
+    setInputState(type);
+    setTimeout(() => setInputState('idle'), 400);
+  }
+
+  async function submitWord(rawWord) {
+    if (checkingRef.current) return;
+    const word = (rawWord || wordInput).trim().toUpperCase().replace(/[^A-Z]/g, '');
+    setWordInput('');
+    requestAnimationFrame(() => inputRef.current?.focus());
+    if (word.length < 2) {
+      showFeedback('Word must be at least 2 letters.', 'err');
+      flash('err');
+      return;
+    }
+    if (!canMakeWord(word, letters)) {
+      showFeedback(`"${word}" uses letters not in the phrase.`, 'err');
+      flash('err');
+      return;
+    }
+    if (myWordsRef.current.find(w => w.word === word)) {
+      showFeedback(`You already found "${word}"!`, 'err');
+      flash('err');
+      return;
+    }
+    checkingRef.current = true;
+    setChecking(true);
+    showFeedback(`Checking "${word}"…`, 'ok');
+    const valid = await isValidWord(word);
+    checkingRef.current = false;
+    setChecking(false);
+    if (!valid) {
+      showFeedback(`"${word}" isn't a valid English word.`, 'err');
+      flash('err');
+      return;
+    }
+    const pts = wordScore(word);
+    const newWords = [{ word, pts, stolen: false }, ...myWordsRef.current];
+    myWordsRef.current = newWords;
+    setMyWords(newWords);
+    setMyScore(prev => {
+      const newScore = prev + pts;
+      submitMyProgress(roomCode, myPlayerNum, newScore, newWords).catch(() => setConnErr('Connection hiccup — retrying on next word.'));
+      return newScore;
+    });
+    showFeedback(`"${word}" — +${pts} pts!`, 'ok');
+    flash('ok');
+    const tier = wordTier(word, pts);
+    if (tier) {
+      setPopup({ word, pts, tier });
+      clearTimeout(popupRef.current);
+      popupRef.current = setTimeout(() => setPopup(null), 1700);
+    }
+  }
+
+  const m = Math.floor(secsLeft / 60);
+  const s = secsLeft % 60;
+  const timerStr = `${m}:${s.toString().padStart(2, '0')}`;
+  const urgent = secsLeft <= 15;
+  const barPct = secsLeft / totalSecs * 100;
+  const barColor = urgent ? S.red : secsLeft <= 30 ? '#e0a020' : S.amber;
+  const inputBorder = inputState === 'ok' ? S.teal : inputState === 'err' ? S.red : S.border;
+  const uniqueLetters = [...new Set(letters)];
+  const tiles = [];
+  let tileIdx = 0;
+  phrase.split(' ').forEach((word, wi, arr) => {
+    word.split('').forEach(ch => {
+      tiles.push(/*#__PURE__*/React.createElement(Tile, { key: tileIdx, ch: ch, idx: tileIdx++, visible: tilesVisible }));
+    });
+    if (wi < arr.length - 1) tiles.push(/*#__PURE__*/React.createElement("div", { key: `sp-${wi}`, style: { width: 8 } }));
+  });
+
+  return /*#__PURE__*/React.createElement("div", { style: { width: '100%', maxWidth: 900 } },
+    /*#__PURE__*/React.createElement(WordPopup, { popup: popup }),
+    /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: 'inline-flex', alignItems: 'center', gap: 7, background: S.amberGlow,
+        border: `1px solid ${S.amberDim}`, borderRadius: 99, padding: '4px 14px',
+        fontSize: '0.78rem', fontWeight: 600, color: S.amber, marginBottom: 14
+      }
+    }, "🌐 Online · Room ", roomCode, " · ", myName, " vs ", opponent.name),
+    connErr && /*#__PURE__*/React.createElement("div", { style: { fontSize: '0.75rem', color: S.red, marginBottom: 10 } }, connErr),
+    /*#__PURE__*/React.createElement("div", { style: { display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 290px', gap: 16 } },
+      /*#__PURE__*/React.createElement("div", { style: { display: 'flex', flexDirection: 'column', gap: 14 } },
+        /*#__PURE__*/React.createElement("div", {
+          style: { background: S.surface, border: `1px solid ${S.border}`, borderRadius: S.radius + 4, padding: 20, position: isMobile ? 'sticky' : 'static', top: isMobile ? 0 : 'auto', zIndex: isMobile ? 5 : 'auto' }
+        },
+          /*#__PURE__*/React.createElement("div", { style: { fontSize: '0.7rem', fontWeight: 700, letterSpacing: S.tracking, textTransform: 'uppercase', color: S.textDim, marginBottom: 10, fontFamily: S.font } }, "Source Phrase"),
+          /*#__PURE__*/React.createElement("div", { style: { display: 'flex', flexWrap: 'wrap', gap: 7, marginBottom: 18, minHeight: 50 } }, tiles),
+          /*#__PURE__*/React.createElement("div", { style: { display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 } },
+            /*#__PURE__*/React.createElement("div", { style: { fontFamily: S.fontMono, fontSize: '1.9rem', fontWeight: 700, color: urgent ? S.red : S.amber, minWidth: 68, animation: urgent ? 'pulse 0.5s infinite alternate' : 'none' } }, timerStr),
+            /*#__PURE__*/React.createElement("div", { style: { flex: 1, height: 5, background: S.surface2, borderRadius: 99, overflow: 'hidden' } },
+              /*#__PURE__*/React.createElement("div", { style: { height: '100%', width: `${barPct}%`, background: barColor, borderRadius: 99, transition: 'width 1s linear, background 0.3s' } })
+            )
+          ),
+          /*#__PURE__*/React.createElement("div", { style: { display: 'flex', gap: 8, marginBottom: 10 } },
+            /*#__PURE__*/React.createElement("input", {
+              ref: inputRef, value: wordInput, onChange: e => setWordInput(e.target.value.toUpperCase()),
+              onKeyDown: e => { if (e.key === 'Enter') { e.preventDefault(); if (!checking) submitWord(); } },
+              placeholder: "TYPE OR SPEAK A WORD…", autoComplete: "off", autoCorrect: "off", autoCapitalize: "characters", enterKeyHint: "go",
+              style: { flex: 1, background: S.surface2, border: `1.5px solid ${inputBorder}`, borderRadius: S.radius, color: S.text, fontFamily: S.fontMono, fontSize: '1.05rem', fontWeight: 700, padding: '10px 14px', letterSpacing: '0.08em', outline: 'none', animation: inputState === 'err' ? 'shake 0.3s' : 'none', transition: 'border-color 0.15s', opacity: checking ? 0.6 : 1 }
+            }),
+            /*#__PURE__*/React.createElement(MicButton, { onWord: w => submitWord(w), disabled: checking }),
+            /*#__PURE__*/React.createElement("button", {
+              onClick: () => !checking && submitWord(), disabled: checking,
+              style: { padding: '10px 18px', background: S.amber, border: 'none', borderRadius: S.radius, color: '#0d0f14', fontFamily: S.font, fontWeight: 700, fontSize: '0.9rem', cursor: checking ? 'not-allowed' : 'pointer', opacity: checking ? 0.6 : 1, boxShadow: S.glow }
+            }, S.actionLabel || 'FORGE')
+          ),
+          /*#__PURE__*/React.createElement("div", { style: { height: 20, fontSize: '0.82rem', fontWeight: 500, color: feedback.type === 'ok' ? S.teal : S.red } }, feedback.msg)
+        ),
+        /*#__PURE__*/React.createElement("div", { style: { background: S.surface, border: `1px solid ${S.border}`, borderRadius: S.radius + 4, padding: 20 } },
+          /*#__PURE__*/React.createElement("div", { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 } },
+            /*#__PURE__*/React.createElement("span", { style: { fontSize: '0.7rem', fontWeight: 700, letterSpacing: S.tracking, textTransform: 'uppercase', color: S.textDim, fontFamily: S.font } }, "Your Words"),
+            /*#__PURE__*/React.createElement("span", { style: { fontFamily: S.fontMono, color: S.amber, fontWeight: 700, fontSize: '0.9rem' } }, myWords.length)
+          ),
+          /*#__PURE__*/React.createElement("div", { style: { display: 'flex', flexDirection: 'column', gap: 5, maxHeight: 220, overflowY: 'auto' } },
+            myWords.length === 0 ? /*#__PURE__*/React.createElement("div", { style: { color: S.textDim, fontSize: '0.82rem', padding: '6px 0' } }, "No words yet — start typing or speak!") :
+            myWords.map(({ word, pts }, i) => /*#__PURE__*/React.createElement("div", {
+              key: i, style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: S.surface2, borderRadius: 6, padding: '7px 12px' }
+            },
+              /*#__PURE__*/React.createElement("span", { style: { fontFamily: S.fontMono, fontWeight: 700, fontSize: '0.88rem', letterSpacing: '0.05em' } }, word),
+              /*#__PURE__*/React.createElement("span", { style: { color: S.amber, fontWeight: 600, fontSize: '0.8rem' } }, "+", pts)
+            ))
+          )
+        )
+      ),
+      /*#__PURE__*/React.createElement("div", { style: { display: 'flex', flexDirection: 'column', gap: 12 } },
+        /*#__PURE__*/React.createElement("div", { style: { background: S.surface, border: `1px solid ${S.border}`, borderRadius: S.radius + 4, padding: 18 } },
+          /*#__PURE__*/React.createElement("div", { style: { fontSize: '0.7rem', fontWeight: 700, letterSpacing: S.tracking, textTransform: 'uppercase', color: S.textDim, marginBottom: 14, fontFamily: S.font } }, "Scoreboard"),
+          /*#__PURE__*/React.createElement("div", { style: { background: S.surface2, borderRadius: 8, padding: '12px 14px', border: `1.5px solid ${S.amber}`, marginBottom: 8 } },
+            /*#__PURE__*/React.createElement("div", { style: { fontSize: '0.72rem', fontWeight: 600, color: S.textDim, textTransform: 'uppercase', letterSpacing: S.tracking, marginBottom: 2, fontFamily: S.font } }, myName, " (you)"),
+            /*#__PURE__*/React.createElement("div", { style: { fontFamily: S.fontMono, fontSize: '1.9rem', fontWeight: 700, lineHeight: 1 } }, myScore)
+          ),
+          /*#__PURE__*/React.createElement("div", { style: { textAlign: 'center', fontSize: '0.68rem', fontWeight: 700, color: S.textDim, letterSpacing: '0.15em', margin: '4px 0' } }, "VS"),
+          /*#__PURE__*/React.createElement("div", { style: { background: S.surface2, borderRadius: 8, padding: '12px 14px', border: '1.5px solid transparent' } },
+            /*#__PURE__*/React.createElement("div", { style: { fontSize: '0.72rem', fontWeight: 600, color: S.textDim, textTransform: 'uppercase', letterSpacing: S.tracking, marginBottom: 2, fontFamily: S.font } }, opponent.name),
+            /*#__PURE__*/React.createElement("div", { style: { fontFamily: S.fontMono, fontSize: '1.9rem', fontWeight: 700, lineHeight: 1 } }, opponent.score),
+            /*#__PURE__*/React.createElement("div", { style: { fontSize: '0.72rem', color: S.textDim, marginTop: 2 } }, (opponent.words || []).length, " words · live")
+          )
+        ),
+        /*#__PURE__*/React.createElement("div", { style: { background: S.surface, border: `1px solid ${S.border}`, borderRadius: S.radius + 4, padding: 18 } },
+          /*#__PURE__*/React.createElement("div", { style: { fontSize: '0.7rem', fontWeight: 700, letterSpacing: S.tracking, textTransform: 'uppercase', color: S.textDim, marginBottom: 10, fontFamily: S.font } }, "Letter Values"),
+          /*#__PURE__*/React.createElement("div", { style: { display: 'flex', flexWrap: 'wrap', gap: 5 } },
+            uniqueLetters.map(ch => /*#__PURE__*/React.createElement("div", {
+              key: ch, style: { display: 'flex', flexDirection: 'column', alignItems: 'center', background: S.surface2, borderRadius: 5, padding: '4px 7px', minWidth: 30 }
+            },
+              /*#__PURE__*/React.createElement("span", { style: { fontFamily: S.fontMono, fontWeight: 700, fontSize: '0.85rem' } }, ch),
+              /*#__PURE__*/React.createElement("span", { style: { fontSize: '0.58rem', color: S.amber, fontWeight: 700 } }, LV[ch] || 0)
+            ))
+          )
+        )
+      )
+    )
+  );
+}
+
 // ── END ──
 function EndScreen({
   players,
@@ -1604,14 +2126,21 @@ function WordForge() {
       setConfig(cfg);
       setScreen('game');
     }
-  }), screen === 'game' && config && /*#__PURE__*/React.createElement(GameScreen, {
+  }), screen === 'game' && config && (config.mode === 'online' ? /*#__PURE__*/React.createElement(OnlineGameScreen, {
+    key: config.roomCode,
+    config: config,
+    onEnd: p => {
+      setFinalPlayers(p);
+      setScreen('end');
+    }
+  }) : /*#__PURE__*/React.createElement(GameScreen, {
     key: JSON.stringify(config),
     config: config,
     onEnd: p => {
       setFinalPlayers(p);
       setScreen('end');
     }
-  }), screen === 'end' && finalPlayers && /*#__PURE__*/React.createElement(EndScreen, {
+  })), screen === 'end' && finalPlayers && /*#__PURE__*/React.createElement(EndScreen, {
     players: finalPlayers,
     onReset: () => setScreen('setup')
   }));
