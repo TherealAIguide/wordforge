@@ -1808,9 +1808,20 @@ function OnlineGameScreen({ config, onEnd }) {
       if (data.status === 'ended' && !endedRef.current) {
         endedRef.current = true;
         clearInterval(tickRef.current);
-        const p1 = data.players['1'] || { name: p1Name, score: 0, words: [] };
-        const p2 = data.players['2'] || { name: p2Name, score: 0, words: [] };
-        onEnd([p1, p2]);
+        // Scores may still be mid-flight to the server when either side
+        // notices the round ended (clock drift / last-word network lag).
+        // Wait a beat, then pull a fresh, server-confirmed copy of the
+        // doc so both players lock in on the exact same final tally.
+        setTimeout(async () => {
+          let fd = data;
+          try {
+            const fresh = await db.collection('rooms').doc(roomCode).get({ source: 'server' });
+            if (fresh.exists) fd = fresh.data();
+          } catch (e) { /* fall back to last-known snapshot */ }
+          const p1 = (fd.players && fd.players['1']) || { name: p1Name, score: 0, words: [] };
+          const p2 = (fd.players && fd.players['2']) || { name: p2Name, score: 0, words: [] };
+          onEnd([p1, p2]);
+        }, 1500);
       }
     });
     return () => unsub();
@@ -1855,6 +1866,10 @@ function OnlineGameScreen({ config, onEnd }) {
     if (checkingRef.current) return;
     if (pausedRef.current) {
       showFeedback('Game is paused.', 'err');
+      return;
+    }
+    if (endedRef.current || secsLeft <= 0) {
+      showFeedback("Time's up!", 'err');
       return;
     }
     const word = (rawWord || wordInput).trim().toUpperCase().replace(/[^A-Z]/g, '');
