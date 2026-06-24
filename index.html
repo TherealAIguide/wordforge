@@ -50,12 +50,13 @@ function genRoomCode() {
   return code;
 }
 
-async function createRoom({ phrase, totalSecs, yourName }) {
+async function createRoom({ phrase, totalSecs, yourName, duplicateMode }) {
   if (!db) throw new Error('Online mode is unavailable right now.');
   const code = genRoomCode();
   await db.collection('rooms').doc(code).set({
     phrase,
     totalSecs,
+    duplicateMode: duplicateMode || 'exclusive',
     players: { 1: { name: yourName, score: 0, words: [] }, 2: null },
     ready: { 1: false, 2: false },
     status: 'waiting',
@@ -480,6 +481,7 @@ function OnlineSetup({ onStart, initialJoinCode }) {
   const [tab, setTab] = useState(initialJoinCode ? 'join' : 'create');
   const [phrase, setPhrase] = useState('');
   const [time, setTime] = useState('120');
+  const [duplicateMode, setDuplicateMode] = useState('exclusive');
   const [yourName, setYourName] = useState('');
   const [joinCode, setJoinCode] = useState(initialJoinCode || '');
   const [roomCode, setRoomCode] = useState(null);
@@ -550,7 +552,8 @@ function OnlineSetup({ onStart, initialJoinCode }) {
           roomCode: code,
           myPlayerNum: num,
           p1Name: p1 ? p1.name : 'Player 1',
-          p2Name: p2 ? p2.name : 'Player 2'
+          p2Name: p2 ? p2.name : 'Player 2',
+          duplicateMode: data.duplicateMode || 'exclusive'
         });
       }
     });
@@ -569,7 +572,7 @@ function OnlineSetup({ onStart, initialJoinCode }) {
     setErr('');
     setBusy(true);
     try {
-      const code = await createRoom({ phrase: clean, totalSecs: parseInt(time), yourName: yourName.trim() });
+      const code = await createRoom({ phrase: clean, totalSecs: parseInt(time), yourName: yourName.trim(), duplicateMode });
       setRoomCode(code);
       setMyPlayerNum(1);
       subscribe(code, 1);
@@ -695,6 +698,19 @@ function OnlineSetup({ onStart, initialJoinCode }) {
           /*#__PURE__*/React.createElement("option", { value: "60" }, "1 minute"),
           /*#__PURE__*/React.createElement("option", { value: "120" }, "2 minutes"),
           /*#__PURE__*/React.createElement("option", { value: "180" }, "3 minutes")
+        )
+      ),
+      /*#__PURE__*/React.createElement("div", { style: { marginBottom: 12, textAlign: 'left' } },
+        /*#__PURE__*/React.createElement("label", { style: labelStyle }, "Duplicate Words"),
+        /*#__PURE__*/React.createElement("select", { value: duplicateMode, onChange: e => setDuplicateMode(e.target.value), style: inputStyle },
+          /*#__PURE__*/React.createElement("option", { value: "exclusive" }, "Exclusive — first to find it wins"),
+          /*#__PURE__*/React.createElement("option", { value: "half" }, "Half Points — 2nd finder gets half"),
+          /*#__PURE__*/React.createElement("option", { value: "shared" }, "Shared — both score full points")
+        ),
+        /*#__PURE__*/React.createElement("p", { style: { fontSize: '0.72rem', color: S.textDim, marginTop: 4 } },
+          duplicateMode === 'exclusive' ? "Once one player finds a word, the other can't score it too." :
+          duplicateMode === 'half' ? "Whoever finds a word second still scores — at half points." :
+          "Less competitive: both players can score the same word in full."
         )
       ),
       /*#__PURE__*/React.createElement("div", { style: { marginBottom: 16, textAlign: 'left' } },
@@ -1837,7 +1853,7 @@ function GameScreen({
 
 // ── ONLINE GAME (cross-device, real-time via Firestore) ──
 function OnlineGameScreen({ config, onEnd }) {
-  const { phrase, totalSecs, roomCode, myPlayerNum, p1Name, p2Name } = config;
+  const { phrase, totalSecs, roomCode, myPlayerNum, p1Name, p2Name, duplicateMode = 'exclusive' } = config;
   const letters = phrase.replace(/\s/g, '').split('');
   const isMobile = useIsMobile();
   const opponentNum = myPlayerNum === 1 ? 2 : 1;
@@ -1988,6 +2004,12 @@ function OnlineGameScreen({ config, onEnd }) {
       flash('err');
       return;
     }
+    const oppWord = (opponent.words || []).find(w => w.word === word);
+    if (oppWord && duplicateMode === 'exclusive') {
+      showFeedback(`${opponent.name} already found "${word}" — try another!`, 'err');
+      flash('err');
+      return;
+    }
     checkingRef.current = true;
     setChecking(true);
     showFeedback(`Checking "${word}"…`, 'ok');
@@ -1999,7 +2021,8 @@ function OnlineGameScreen({ config, onEnd }) {
       flash('err');
       return;
     }
-    const pts = wordScore(word);
+    let pts = wordScore(word);
+    if (oppWord && duplicateMode === 'half') pts = Math.max(1, Math.floor(pts / 2));
     const newWords = [{ word, pts, stolen: false }, ...myWordsRef.current];
     myWordsRef.current = newWords;
     setMyWords(newWords);
@@ -2008,7 +2031,7 @@ function OnlineGameScreen({ config, onEnd }) {
       submitMyProgress(roomCode, myPlayerNum, newScore, newWords).catch(() => setConnErr('Connection hiccup — retrying on next word.'));
       return newScore;
     });
-    showFeedback(`"${word}" — +${pts} pts!`, 'ok');
+    showFeedback(oppWord ? `"${word}" — +${pts} pts! (${opponent.name} found it too)` : `"${word}" — +${pts} pts!`, 'ok');
     flash('ok');
     const tier = wordTier(word, pts);
     if (tier) {
