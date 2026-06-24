@@ -57,6 +57,7 @@ async function createRoom({ phrase, totalSecs, yourName }) {
     phrase,
     totalSecs,
     players: { 1: { name: yourName, score: 0, words: [] }, 2: null },
+    ready: { 1: false, 2: false },
     status: 'waiting',
     createdAt: firebase.firestore.FieldValue.serverTimestamp()
   });
@@ -88,6 +89,17 @@ async function startRoom(code) {
     startTime: firebase.firestore.FieldValue.serverTimestamp()
   });
 }
+
+async function setReady(code, playerNum, val) {
+  if (!db) return;
+  await db.collection('rooms').doc(code).update({ [`ready.${playerNum}`]: val });
+}
+
+// Brief synchronized pause between "round starts" and "clock actually ticks"
+// so both devices get a clear, simultaneous heads-up instead of an abrupt jump
+// straight into typing — and so a slow network catch-up doesn't eat into one
+// player's time before their screen even renders the timer.
+const START_COUNTDOWN_MS = 3000;
 
 async function submitMyProgress(code, myPlayerNum, score, words) {
   if (!db) return;
@@ -464,25 +476,64 @@ function Tile({
 }
 
 // ── ONLINE LOBBY (cross-device create/join room) ──
-function OnlineSetup({ onStart }) {
-  const [tab, setTab] = useState('create');
+function OnlineSetup({ onStart, initialJoinCode }) {
+  const [tab, setTab] = useState(initialJoinCode ? 'join' : 'create');
   const [phrase, setPhrase] = useState('');
   const [time, setTime] = useState('120');
   const [yourName, setYourName] = useState('');
-  const [joinCode, setJoinCode] = useState('');
+  const [joinCode, setJoinCode] = useState(initialJoinCode || '');
   const [roomCode, setRoomCode] = useState(null);
   const [myPlayerNum, setMyPlayerNum] = useState(null);
   const [room, setRoom] = useState(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
+  const [linkCopied, setLinkCopied] = useState(false);
   const startedRef = useRef(false);
   const unsubRef = useRef(null);
+  const autoStartedRef = useRef(false);
 
   useEffect(() => {
     return () => {
       if (unsubRef.current) unsubRef.current();
     };
   }, []);
+
+  // Host-only: once both players have opted in via the Ready button,
+  // kick off the round automatically — no separate "Start Round" click.
+  useEffect(() => {
+    if (myPlayerNum !== 1 || !room || autoStartedRef.current) return;
+    if (room.status !== 'waiting') return;
+    const p2x = room.players && room.players['2'];
+    const bothReady = !!(room.ready && room.ready['1'] && room.ready['2']);
+    if (p2x && bothReady) {
+      autoStartedRef.current = true;
+      startRoom(roomCode).catch(e => {
+        autoStartedRef.current = false;
+        setErr(e.message || 'Could not start the round.');
+      });
+    }
+  }, [room, myPlayerNum, roomCode]);
+
+  async function toggleReady() {
+    if (!roomCode || !myPlayerNum) return;
+    const currentlyReady = !!(room && room.ready && room.ready[String(myPlayerNum)]);
+    try {
+      await setReady(roomCode, myPlayerNum, !currentlyReady);
+    } catch (e) {
+      setErr('Could not update ready status — try again.');
+    }
+  }
+
+  function copyInviteLink() {
+    if (!roomCode) return;
+    const url = `${window.location.origin}${window.location.pathname}?room=${roomCode}`;
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(url).then(() => {
+        setLinkCopied(true);
+        setTimeout(() => setLinkCopied(false), 2200);
+      }).catch(() => setErr('Could not copy the link — copy it from the address bar instead.'));
+    }
+  }
 
   function subscribe(code, num) {
     if (unsubRef.current) unsubRef.current();
@@ -550,16 +601,6 @@ function OnlineSetup({ onStart }) {
     setBusy(false);
   }
 
-  async function doStart() {
-    setBusy(true);
-    try {
-      await startRoom(roomCode);
-    } catch (e) {
-      setErr(e.message || 'Could not start the round.');
-    }
-    setBusy(false);
-  }
-
   const inputStyle = {
     width: '100%',
     background: S.surface2,
@@ -586,28 +627,48 @@ function OnlineSetup({ onStart }) {
   if (roomCode) {
     const p2 = room && room.players ? room.players['2'] : null;
     const p1 = room && room.players ? room.players['1'] : null;
+    const oppNum = myPlayerNum === 1 ? 2 : 1;
+    const oppPlayer = oppNum === 1 ? p1 : p2;
+    const oppPresent = myPlayerNum === 1 ? !!p2 : true;
+    const myReady = !!(room && room.ready && room.ready[String(myPlayerNum)]);
+    const oppReady = !!(room && room.ready && room.ready[String(oppNum)]);
     return /*#__PURE__*/React.createElement("div", {
       style: { background: S.surface2, border: `1px solid ${S.border}`, borderRadius: S.radius + 4, padding: 20, textAlign: 'center' }
     },
     /*#__PURE__*/React.createElement("div", { style: { fontSize: '0.78rem', color: S.textDim, marginBottom: 6, fontFamily: S.font } }, "ROOM CODE"),
     /*#__PURE__*/React.createElement("div", { style: { fontFamily: S.fontMono, fontSize: '2.2rem', fontWeight: 700, letterSpacing: '0.15em', color: S.amber, marginBottom: 10 } }, roomCode),
-    myPlayerNum === 1 ?
-      /*#__PURE__*/React.createElement("div", { style: { fontSize: '0.82rem', color: S.textDim, marginBottom: 16 } }, "Share this code with your opponent so they can join.") :
-      /*#__PURE__*/React.createElement("div", { style: { fontSize: '0.82rem', color: S.textDim, marginBottom: 16 } }, "Waiting for ", (p1 ? p1.name : 'the host'), " to start the round…"),
-    /*#__PURE__*/React.createElement("div", { style: { display: 'flex', justifyContent: 'center', gap: 16, marginBottom: 16 } },
-      /*#__PURE__*/React.createElement("div", { style: { fontSize: '0.85rem', color: S.text } }, "👤 ", p1 ? p1.name : '—'),
-      /*#__PURE__*/React.createElement("div", { style: { fontSize: '0.85rem', color: p2 ? S.teal : S.textDim } }, "👤 ", p2 ? p2.name : 'waiting…')
-    ),
     myPlayerNum === 1 && /*#__PURE__*/React.createElement("button", {
-      onClick: doStart,
-      disabled: !p2 || busy,
+      onClick: copyInviteLink,
+      style: {
+        display: 'inline-flex', alignItems: 'center', gap: 6, margin: '0 0 14px',
+        padding: '7px 14px', borderRadius: 99, border: `1px solid ${S.border}`,
+        background: linkCopied ? S.teal : 'transparent', color: linkCopied ? '#0d0f14' : S.textDim,
+        fontFamily: S.font, fontWeight: 600, fontSize: '0.78rem', cursor: 'pointer'
+      }
+    }, linkCopied ? '✓ Link Copied!' : '🔗 Copy Invite Link'),
+    /*#__PURE__*/React.createElement("div", { style: { fontSize: '0.82rem', color: S.textDim, marginBottom: 16 } },
+      myPlayerNum === 1 ? "Share the code or link with your opponent — then both mark ready below." : `You're in! Mark yourself ready when you're set.`
+    ),
+    /*#__PURE__*/React.createElement("div", { style: { display: 'flex', justifyContent: 'center', gap: 16, marginBottom: 16 } },
+      /*#__PURE__*/React.createElement("div", { style: { fontSize: '0.85rem', color: S.text } }, "👤 ", p1 ? p1.name : '—', " ", room && room.ready && room.ready['1'] ? '✅' : ''),
+      /*#__PURE__*/React.createElement("div", { style: { fontSize: '0.85rem', color: p2 ? S.teal : S.textDim } }, "👤 ", p2 ? p2.name : 'waiting…', " ", room && room.ready && room.ready['2'] ? '✅' : '')
+    ),
+    oppPresent ? /*#__PURE__*/React.createElement("button", {
+      onClick: toggleReady,
+      disabled: busy,
       style: {
         width: '100%', padding: '13px 0', borderRadius: S.radius + 1, border: 'none',
-        background: p2 ? S.amber : S.border, color: p2 ? '#0d0f14' : S.textDim,
-        fontFamily: S.font, fontSize: '0.95rem', fontWeight: 700,
-        cursor: p2 ? 'pointer' : 'not-allowed'
+        background: myReady ? S.teal : S.amber, color: '#0d0f14',
+        fontFamily: S.font, fontSize: '0.95rem', fontWeight: 700, cursor: 'pointer'
       }
-    }, p2 ? 'Start Round →' : 'Waiting for opponent…'),
+    }, myReady ? `✓ Ready — waiting for ${oppPlayer ? oppPlayer.name : 'opponent'}…` : "I'm Ready →") :
+      /*#__PURE__*/React.createElement("div", {
+        style: {
+          width: '100%', padding: '13px 0', borderRadius: S.radius + 1,
+          background: S.border, color: S.textDim, fontFamily: S.font, fontSize: '0.95rem', fontWeight: 700
+        }
+      }, 'Waiting for opponent…'),
+    oppPresent && !myReady && oppReady && /*#__PURE__*/React.createElement("p", { style: { color: S.teal, fontSize: '0.78rem', marginTop: 10 } }, (oppPlayer ? oppPlayer.name : 'Your opponent') + " is ready and waiting on you!"),
     err && /*#__PURE__*/React.createElement("p", { style: { color: S.red, fontSize: '0.82rem', marginTop: 10 } }, err));
   }
 
@@ -673,8 +734,24 @@ function SetupScreen({
   const [p1, setP1] = useState('');
   const [p2, setP2] = useState('');
   const [time, setTime] = useState('120');
-  const [mode, setMode] = useState('sync');
+  // A shared invite link (?room=CODE) should drop the recipient straight
+  // into Online → Join with the code pre-filled, instead of making them
+  // copy/paste or retype it by hand.
+  const [initialJoinCode] = useState(() => {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      return (params.get('room') || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 6);
+    } catch (e) {
+      return '';
+    }
+  });
+  const [mode, setMode] = useState(() => initialJoinCode ? 'online' : 'sync');
   const [err, setErr] = useState('');
+  useEffect(() => {
+    if (initialJoinCode && window.history && window.history.replaceState) {
+      window.history.replaceState({}, '', window.location.pathname);
+    }
+  }, []);
   function start() {
     const clean = phrase.trim().toUpperCase();
     if (!clean || clean.replace(/\s/g, '').length < 3) {
@@ -816,7 +893,7 @@ function SetupScreen({
   }, "One player creates a room and shares the code. The other joins from their own phone or computer. Both play the same phrase at the same time, and scores sync live between devices."))), /*#__PURE__*/React.createElement(ArenaPicker, {
     themeKey: themeKey,
     onChange: onThemeChange
-  }), mode === 'online' ? /*#__PURE__*/React.createElement(OnlineSetup, { onStart: onStart }) : /*#__PURE__*/React.createElement(React.Fragment, null, [{
+  }), mode === 'online' ? /*#__PURE__*/React.createElement(OnlineSetup, { onStart: onStart, initialJoinCode: initialJoinCode }) : /*#__PURE__*/React.createElement(React.Fragment, null, [{
     label: 'Source Word / Phrase',
     val: phrase,
     set: setPhrase,
@@ -1779,6 +1856,7 @@ function OnlineGameScreen({ config, onEnd }) {
   const [popup, setPopup] = useState(null);
   const [paused, setPaused] = useState(false);
   const [pauseBusy, setPauseBusy] = useState(false);
+  const [countdown, setCountdown] = useState(START_COUNTDOWN_MS / 1000);
 
   const popupRef = useRef(null);
   const inputRef = useRef(null);
@@ -1790,6 +1868,7 @@ function OnlineGameScreen({ config, onEnd }) {
   const endedRef = useRef(false);
   const hitZeroRef = useRef(false);
   const pausedRef = useRef(false);
+  const countingDownRef = useRef(true);
 
   useEffect(() => {
     setTimeout(() => setTilesVisible(true), 80);
@@ -1830,7 +1909,22 @@ function OnlineGameScreen({ config, onEnd }) {
   useEffect(() => {
     tickRef.current = setInterval(() => {
       if (!startTimeMsRef.current || pausedRef.current) return;
-      const elapsed = Math.floor((Date.now() - startTimeMsRef.current) / 1000);
+      // The round timer doesn't truly start at startTime itself — there's a
+      // brief shared countdown first (see START_COUNTDOWN_MS) so the round
+      // never just abruptly drops both players into typing.
+      const trueStart = startTimeMsRef.current + START_COUNTDOWN_MS;
+      const untilStart = trueStart - Date.now();
+      if (untilStart > 0) {
+        countingDownRef.current = true;
+        setCountdown(Math.ceil(untilStart / 1000));
+        return;
+      }
+      if (countingDownRef.current) {
+        countingDownRef.current = false;
+        setCountdown('GO');
+        setTimeout(() => setCountdown(null), 500);
+      }
+      const elapsed = Math.floor((Date.now() - trueStart) / 1000);
       const left = Math.max(0, totalSecs - elapsed);
       setSecsLeft(left);
       if (left === 0 && !hitZeroRef.current) {
@@ -1864,6 +1958,10 @@ function OnlineGameScreen({ config, onEnd }) {
 
   async function submitWord(rawWord) {
     if (checkingRef.current) return;
+    if (typeof countdown === 'number' || countdown === 'GO') {
+      showFeedback('Get ready — round starts in a moment!', 'err');
+      return;
+    }
     if (pausedRef.current) {
       showFeedback('Game is paused.', 'err');
       return;
@@ -1927,6 +2025,7 @@ function OnlineGameScreen({ config, onEnd }) {
   const barPct = secsLeft / totalSecs * 100;
   const barColor = urgent ? S.red : secsLeft <= 30 ? '#e0a020' : S.amber;
   const inputBorder = inputState === 'ok' ? S.teal : inputState === 'err' ? S.red : S.border;
+  const roundLocked = typeof countdown === 'number' || countdown === 'GO';
   const uniqueLetters = [...new Set(letters)];
   const tiles = [];
   let tileIdx = 0;
@@ -1939,6 +2038,20 @@ function OnlineGameScreen({ config, onEnd }) {
 
   return /*#__PURE__*/React.createElement("div", { style: { width: '100%', maxWidth: 900 } },
     /*#__PURE__*/React.createElement(WordPopup, { popup: popup }),
+    countdown !== null && countdown !== undefined && /*#__PURE__*/React.createElement("div", {
+      style: {
+        position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, zIndex: 998,
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        background: 'rgba(13,15,20,0.72)', pointerEvents: 'none'
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontFamily: S.fontMono, fontWeight: 700,
+        fontSize: countdown === 'GO' ? '5.5rem' : '6rem',
+        color: countdown === 'GO' ? S.teal : S.amber,
+        textShadow: S.glow, animation: 'pulse 0.5s infinite alternate'
+      }
+    }, countdown === 'GO' ? 'GO!' : countdown)),
     /*#__PURE__*/React.createElement("div", { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 10, marginBottom: 14 } },
       /*#__PURE__*/React.createElement("div", {
         style: {
@@ -1970,6 +2083,17 @@ function OnlineGameScreen({ config, onEnd }) {
         /*#__PURE__*/React.createElement("div", {
           style: { background: S.surface, border: `1px solid ${S.border}`, borderRadius: S.radius + 4, padding: 20, position: isMobile ? 'sticky' : 'static', top: isMobile ? 0 : 'auto', zIndex: isMobile ? 5 : 'auto' }
         },
+          /*#__PURE__*/React.createElement("div", {
+            style: {
+              display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10,
+              background: S.surface2, borderRadius: 8, padding: '8px 12px', marginBottom: 14,
+              fontFamily: S.fontMono, fontWeight: 700, fontSize: '1.05rem'
+            }
+          },
+            /*#__PURE__*/React.createElement("span", { style: { color: S.amber } }, myScore, /*#__PURE__*/React.createElement("span", { style: { fontFamily: S.font, fontWeight: 600, fontSize: '0.68rem', color: S.textDim, marginLeft: 5, textTransform: 'uppercase', letterSpacing: S.tracking } }, myName)),
+            /*#__PURE__*/React.createElement("span", { style: { fontSize: '0.68rem', fontWeight: 700, color: S.textDim, letterSpacing: '0.12em' } }, "VS"),
+            /*#__PURE__*/React.createElement("span", { style: { color: S.text, textAlign: 'right' } }, opponent.score, /*#__PURE__*/React.createElement("span", { style: { fontFamily: S.font, fontWeight: 600, fontSize: '0.68rem', color: S.textDim, marginLeft: 5, textTransform: 'uppercase', letterSpacing: S.tracking } }, opponent.name))
+          ),
           /*#__PURE__*/React.createElement("div", { style: { fontSize: '0.7rem', fontWeight: 700, letterSpacing: S.tracking, textTransform: 'uppercase', color: S.textDim, marginBottom: 10, fontFamily: S.font } }, "Source Phrase"),
           /*#__PURE__*/React.createElement("div", { style: { display: 'flex', flexWrap: 'wrap', gap: 7, marginBottom: 18, minHeight: 50 } }, tiles),
           /*#__PURE__*/React.createElement("div", { style: { display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 } },
@@ -1981,14 +2105,14 @@ function OnlineGameScreen({ config, onEnd }) {
           /*#__PURE__*/React.createElement("div", { style: { display: 'flex', gap: 8, marginBottom: 10 } },
             /*#__PURE__*/React.createElement("input", {
               ref: inputRef, value: wordInput, onChange: e => setWordInput(e.target.value.toUpperCase()),
-              onKeyDown: e => { if (e.key === 'Enter') { e.preventDefault(); if (!checking && !paused) submitWord(); } },
-              placeholder: paused ? "PAUSED…" : "TYPE OR SPEAK A WORD…", autoComplete: "off", autoCorrect: "off", autoCapitalize: "characters", enterKeyHint: "go", disabled: paused,
-              style: { flex: 1, background: S.surface2, border: `1.5px solid ${inputBorder}`, borderRadius: S.radius, color: S.text, fontFamily: S.fontMono, fontSize: '1.05rem', fontWeight: 700, padding: '10px 14px', letterSpacing: '0.08em', outline: 'none', animation: inputState === 'err' ? 'shake 0.3s' : 'none', transition: 'border-color 0.15s', opacity: checking || paused ? 0.6 : 1 }
+              onKeyDown: e => { if (e.key === 'Enter') { e.preventDefault(); if (!checking && !paused && !roundLocked) submitWord(); } },
+              placeholder: roundLocked ? "GET READY…" : paused ? "PAUSED…" : "TYPE OR SPEAK A WORD…", autoComplete: "off", autoCorrect: "off", autoCapitalize: "characters", enterKeyHint: "go", disabled: paused || roundLocked,
+              style: { flex: 1, background: S.surface2, border: `1.5px solid ${inputBorder}`, borderRadius: S.radius, color: S.text, fontFamily: S.fontMono, fontSize: '1.05rem', fontWeight: 700, padding: '10px 14px', letterSpacing: '0.08em', outline: 'none', animation: inputState === 'err' ? 'shake 0.3s' : 'none', transition: 'border-color 0.15s', opacity: checking || paused || roundLocked ? 0.6 : 1 }
             }),
-            /*#__PURE__*/React.createElement(MicButton, { onWord: w => submitWord(w), disabled: checking || paused }),
+            /*#__PURE__*/React.createElement(MicButton, { onWord: w => submitWord(w), disabled: checking || paused || roundLocked }),
             /*#__PURE__*/React.createElement("button", {
-              onClick: () => !checking && !paused && submitWord(), disabled: checking || paused,
-              style: { padding: '10px 18px', background: S.amber, border: 'none', borderRadius: S.radius, color: '#0d0f14', fontFamily: S.font, fontWeight: 700, fontSize: '0.9rem', cursor: checking || paused ? 'not-allowed' : 'pointer', opacity: checking || paused ? 0.6 : 1, boxShadow: S.glow }
+              onClick: () => !checking && !paused && !roundLocked && submitWord(), disabled: checking || paused || roundLocked,
+              style: { padding: '10px 18px', background: S.amber, border: 'none', borderRadius: S.radius, color: '#0d0f14', fontFamily: S.font, fontWeight: 700, fontSize: '0.9rem', cursor: checking || paused || roundLocked ? 'not-allowed' : 'pointer', opacity: checking || paused || roundLocked ? 0.6 : 1, boxShadow: S.glow }
             }, S.actionLabel || 'FORGE')
           ),
           /*#__PURE__*/React.createElement("div", { style: { height: 20, fontSize: '0.82rem', fontWeight: 500, color: feedback.type === 'ok' ? S.teal : S.red } }, feedback.msg)
@@ -2112,7 +2236,32 @@ function EndScreen({
       color: S.textDim,
       marginTop: 2
     }
-  }, p.words.filter(w => !w.stolen).length, " words")))), /*#__PURE__*/React.createElement("button", {
+  }, p.words.filter(w => !w.stolen).length, " words"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexWrap: 'wrap',
+      gap: 4,
+      justifyContent: 'center',
+      marginTop: 10
+    }
+  }, p.words.filter(w => !w.stolen).length === 0 ? /*#__PURE__*/React.createElement("span", {
+    style: { fontSize: '0.7rem', color: S.textDim }
+  }, "No words found") : p.words.filter(w => !w.stolen).map((w, wi) => /*#__PURE__*/React.createElement("span", {
+    key: wi,
+    style: {
+      display: 'inline-flex',
+      alignItems: 'center',
+      gap: 3,
+      background: S.surface2,
+      border: `1px solid ${S.border}`,
+      borderRadius: 99,
+      padding: '3px 8px',
+      fontFamily: S.fontMono,
+      fontSize: '0.7rem',
+      fontWeight: 700,
+      letterSpacing: '0.04em'
+    }
+  }, w.word, /*#__PURE__*/React.createElement("span", { style: { color: S.amber, fontWeight: 600 } }, "+", w.pts))))))), /*#__PURE__*/React.createElement("button", {
     onClick: onReset,
     style: {
       width: '100%',
