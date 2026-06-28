@@ -1,0 +1,2710 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>WordForge</title>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Space+Mono:wght@400;700&family=Oswald:wght@500;600;700&family=Press+Start+2P&family=Cinzel:wght@600;700&family=Playfair+Display:wght@700;800&family=Orbitron:wght@600;700;800&family=VT323&display=swap" rel="stylesheet" />
+<style>
+  html, body { margin: 0; padding: 0; background: #0d0f14; }
+  #root { min-height: 100vh; }
+  @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.2} }
+  @keyframes neonFlicker { 0%,100%{opacity:1} 45%{opacity:1} 46%{opacity:0.35} 47%{opacity:1} 71%{opacity:1} 72%{opacity:0.5} 73%{opacity:1} }
+</style>
+<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+</head>
+<body>
+<div id="root"></div>
+<script>
+const {
+  useState,
+  useEffect,
+  useRef,
+  useCallback
+} = React;
+
+// ── FIREBASE (cross-device online mode) ──
+const firebaseConfig = {
+  apiKey: "AIzaSyC7z-AH0JDs6ULp6XX6DSlqNwMMwNE5Eh0",
+  authDomain: "wordforge-8030c.firebaseapp.com",
+  projectId: "wordforge-8030c",
+  storageBucket: "wordforge-8030c.firebasestorage.app",
+  messagingSenderId: "420384102674",
+  appId: "1:420384102674:web:4b207693052de670877bcb"
+};
+let db = null;
+try {
+  firebase.initializeApp(firebaseConfig);
+  db = firebase.firestore();
+} catch (e) {
+  console.error('Firebase init failed — online mode will be unavailable.', e);
+}
+
+function genRoomCode() {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // no O/0/I/1, avoids confusion
+  let code = '';
+  for (let i = 0; i < 4; i++) code += chars[Math.floor(Math.random() * chars.length)];
+  return code;
+}
+
+async function createRoom({ phrase, totalSecs, yourName, duplicateMode, maxPlayers }) {
+  if (!db) throw new Error('Online mode is unavailable right now.');
+  const code = genRoomCode();
+  const mp = maxPlayers === 3 ? 3 : 2;
+  const players = { 1: { name: yourName, score: 0, words: [] } };
+  const ready = { 1: false };
+  for (let i = 2; i <= mp; i++) { players[i] = null; ready[i] = false; }
+  await db.collection('rooms').doc(code).set({
+    phrase,
+    totalSecs,
+    duplicateMode: duplicateMode || 'exclusive',
+    maxPlayers: mp,
+    players,
+    ready,
+    status: 'waiting',
+    createdAt: firebase.firestore.FieldValue.serverTimestamp()
+  });
+  return code;
+}
+
+async function joinRoom(code, yourName) {
+  if (!db) throw new Error('Online mode is unavailable right now.');
+  const ref = db.collection('rooms').doc(code.toUpperCase().trim());
+  const snap = await ref.get();
+  if (!snap.exists) throw new Error('Room not found. Double-check the code.');
+  const data = snap.data();
+  const mp = data.maxPlayers || 2;
+  let slot = null;
+  for (let i = 2; i <= mp; i++) {
+    if (!(data.players && data.players[String(i)])) { slot = i; break; }
+  }
+  if (slot === null) throw new Error('That room is already full.');
+  if (data.status !== 'waiting') throw new Error('That round has already started.');
+  await ref.update({ [`players.${slot}`]: { name: yourName, score: 0, words: [] } });
+  return { code: code.toUpperCase().trim(), slot };
+}
+
+// Read-only existence check used by Spectate mode — confirms a room is
+// real before dropping the viewer into the live board, but never claims
+// a player slot or writes anything.
+async function peekRoom(code) {
+  if (!db) throw new Error('Online mode is unavailable right now.');
+  const clean = code.toUpperCase().trim();
+  const ref = db.collection('rooms').doc(clean);
+  const snap = await ref.get();
+  if (!snap.exists) throw new Error('Room not found. Double-check the code.');
+  return clean;
+}
+
+function listenToRoom(code, cb) {
+  if (!db) return () => {};
+  return db.collection('rooms').doc(code).onSnapshot(snap => {
+    if (snap.exists) cb(snap.data());
+  }, err => console.error('Room listener error', err));
+}
+
+async function startRoom(code) {
+  await db.collection('rooms').doc(code).update({
+    status: 'active',
+    startTime: firebase.firestore.FieldValue.serverTimestamp()
+  });
+}
+
+async function setReady(code, playerNum, val) {
+  if (!db) return;
+  await db.collection('rooms').doc(code).update({ [`ready.${playerNum}`]: val });
+}
+
+// Brief synchronized pause between "round starts" and "clock actually ticks"
+// so both devices get a clear, simultaneous heads-up instead of an abrupt jump
+// straight into typing — and so a slow network catch-up doesn't eat into one
+// player's time before their screen even renders the timer.
+const START_COUNTDOWN_MS = 3000;
+
+async function submitMyProgress(code, myPlayerNum, score, words) {
+  if (!db) return;
+  await db.collection('rooms').doc(code).update({
+    [`players.${myPlayerNum}.score`]: score,
+    [`players.${myPlayerNum}.words`]: words
+  });
+}
+
+async function endRoom(code) {
+  if (!db) return;
+  await db.collection('rooms').doc(code).update({ status: 'ended' }).catch(() => {});
+}
+
+async function pauseRoom(code) {
+  if (!db) return;
+  await db.collection('rooms').doc(code).update({
+    paused: true,
+    pausedAt: firebase.firestore.FieldValue.serverTimestamp()
+  });
+}
+
+async function resumeRoom(code) {
+  if (!db) return;
+  const ref = db.collection('rooms').doc(code);
+  const snap = await ref.get();
+  const data = snap.data();
+  if (!data || !data.paused) return;
+  const pausedAtMs = data.pausedAt && data.pausedAt.toMillis ? data.pausedAt.toMillis() : Date.now();
+  const startMs = data.startTime && data.startTime.toMillis ? data.startTime.toMillis() : Date.now();
+  const pauseDurationMs = Date.now() - pausedAtMs;
+  await ref.update({
+    paused: false,
+    pausedAt: null,
+    startTime: firebase.firestore.Timestamp.fromMillis(startMs + pauseDurationMs)
+  });
+}
+
+// ── RESPONSIVE HELPER ──
+function useIsMobile(breakpoint = 720) {
+  const [isMobile, setIsMobile] = useState(() => typeof window !== 'undefined' && window.innerWidth <= breakpoint);
+  useEffect(() => {
+    const mq = window.matchMedia(`(max-width: ${breakpoint}px)`);
+    const handler = e => setIsMobile(e.matches);
+    if (mq.addEventListener) mq.addEventListener('change', handler);
+    else mq.addListener(handler);
+    return () => {
+      if (mq.removeEventListener) mq.removeEventListener('change', handler);
+      else mq.removeListener(handler);
+    };
+  }, [breakpoint]);
+  return isMobile;
+}
+
+// ── SCRABBLE VALUES ──
+const LV = {
+  A: 1,
+  E: 1,
+  I: 1,
+  O: 1,
+  U: 1,
+  L: 1,
+  N: 1,
+  S: 1,
+  T: 1,
+  R: 1,
+  D: 2,
+  G: 2,
+  B: 3,
+  C: 3,
+  M: 3,
+  P: 3,
+  F: 4,
+  H: 4,
+  V: 4,
+  W: 4,
+  Y: 4,
+  K: 5,
+  J: 8,
+  X: 8,
+  Q: 10,
+  Z: 10
+};
+
+// ── FALLBACK DICTIONARY (used while API loads or if it fails) ──
+const FALLBACK = new Set(["AM", "AN", "AS", "AT", "AX", "BE", "BY", "DO", "EX", "GO", "HE", "HI", "IF", "IN", "IS", "IT", "ME", "MY", "NO", "OF", "OH", "OK", "ON", "OR", "OX", "SO", "TO", "UP", "US", "WE", "ACE", "ACT", "ADD", "AGE", "AGO", "AID", "AIM", "AIR", "ALL", "AND", "ANT", "APE", "APT", "ARC", "ARE", "ARK", "ARM", "ART", "ASH", "ASK", "ATE", "AWE", "AXE", "BAD", "BAG", "BAN", "BAR", "BAT", "BAY", "BED", "BIG", "BIT", "BOW", "BOX", "BOY", "BUD", "BUG", "BUN", "BUS", "BUT", "BUY", "CAN", "CAP", "CAR", "CAT", "COP", "COT", "COW", "CRY", "CUB", "CUP", "CUT", "DAD", "DAM", "DAY", "DEN", "DEW", "DIG", "DIM", "DIP", "DOC", "DOG", "DOT", "DRY", "DUE", "DUG", "DUN", "DUO", "EAR", "EAT", "EEL", "EGG", "ELM", "EMU", "END", "ERA", "EVE", "EWE", "EYE", "FAD", "FAN", "FAR", "FAT", "FAX", "FED", "FEW", "FIG", "FIN", "FIT", "FIX", "FLY", "FOE", "FOG", "FOR", "FUN", "FUR", "GAP", "GAS", "GEL", "GEM", "GET", "GOD", "GOT", "GUM", "GUN", "GUT", "GUY", "HAD", "HAM", "HAS", "HAT", "HAY", "HEM", "HEN", "HER", "HIM", "HIS", "HIT", "HOG", "HOP", "HOT", "HOW", "HUB", "HUG", "HUM", "ICE", "ILL", "INN", "ION", "IRE", "IRK", "IVY", "JAB", "JAM", "JAR", "JAW", "JAY", "JET", "JOB", "JOG", "JOT", "JOY", "JUG", "JUT", "KEG", "KID", "KIT", "LAB", "LAD", "LAG", "LAP", "LAW", "LAX", "LAY", "LEA", "LED", "LEG", "LET", "LID", "LIE", "LIT", "LOG", "LOT", "LOW", "MAD", "MAN", "MAP", "MAR", "MAT", "MAW", "MAY", "MEN", "MET", "MID", "MIX", "MOB", "MOD", "MOM", "MOP", "MUD", "MUG", "NAB", "NAG", "NAP", "NAY", "NET", "NEW", "NIL", "NIP", "NIT", "NOD", "NOR", "NOT", "NOW", "NUB", "NUN", "NUT", "OAK", "OAR", "OAT", "ODD", "ODE", "OFF", "OFT", "OIL", "OLD", "ONE", "OPT", "ORB", "ORE", "OWE", "OWL", "OWN", "PAD", "PAL", "PAN", "PAR", "PAT", "PAW", "PAY", "PEA", "PEG", "PEN", "PEP", "PET", "PEW", "PIE", "PIG", "PIN", "PIT", "PLY", "POD", "POP", "POT", "POW", "PRY", "PUB", "PUG", "PUN", "PUP", "PUT", "RAG", "RAM", "RAN", "RAP", "RAT", "RAW", "RAY", "RED", "REF", "RIB", "RID", "RIG", "RIM", "RIP", "ROB", "ROD", "ROT", "ROW", "RUB", "RUG", "RUM", "RUN", "SAD", "SAG", "SAP", "SAT", "SAW", "SAY", "SEA", "SET", "SEW", "SIT", "SIX", "SKI", "SKY", "SLY", "SOB", "SOD", "SON", "SOP", "SOT", "SOW", "SOY", "SPA", "SPY", "STY", "SUB", "SUM", "SUN", "SUP", "TAB", "TAD", "TAN", "TAP", "TAR", "TAX", "TEA", "TEN", "TIE", "TIN", "TIP", "TOE", "TON", "TOP", "TOT", "TOW", "TOY", "TUB", "TUG", "TUN", "TWO", "UGH", "URN", "USE", "VAN", "VAT", "VET", "VIA", "VIE", "VOW", "WAD", "WAR", "WAS", "WAX", "WAY", "WEB", "WED", "WEE", "WET", "WHO", "WHY", "WIN", "WIT", "WOE", "WOK", "WON", "WOO", "WOW", "YAM", "YAP", "YAW", "YEA", "YEW", "YON", "ZAP", "ZEN", "ZIP", "ZIT", "ZOO", "ABLE", "ACHE", "ACID", "ACRE", "AGED", "AIDE", "AKIN", "ALLY", "ALSO", "ALTO", "AMEN", "AMID", "APEX", "ARCH", "AREA", "ARMS", "ARMY", "ARTS", "ATOM", "ATOP", "AUTO", "AVID", "AWAY", "AXES", "AXLE", "BABE", "BACK", "BAIL", "BAIT", "BAKE", "BALD", "BALE", "BALL", "BALM", "BAND", "BANE", "BANK", "BARE", "BARK", "BARN", "BASE", "BASH", "BASK", "BASS", "BATH", "BEAK", "BEAM", "BEAN", "BEAR", "BEAT", "BEEF", "BEEN", "BEER", "BEET", "BELL", "BELT", "BEND", "BEST", "BITE", "BLED", "BLOW", "BLUE", "BLUR", "BOAR", "BOAT", "BOIL", "BOLD", "BOLT", "BOND", "BONE", "BOON", "BORE", "BORN", "BOTH", "BOUT", "BREW", "BROW", "BUCK", "BULL", "BUMP", "BURN", "BUZZ", "CAFE", "CAGE", "CAKE", "CALF", "CALL", "CALM", "CAME", "CAMP", "CANE", "CAPE", "CARE", "CART", "CASE", "CASH", "CAST", "CAVE", "CENT", "CHIN", "CHIP", "CITE", "COAL", "COAT", "CODE", "COIL", "COIN", "COLD", "COME", "CONE", "COOK", "COOL", "COPE", "COPY", "CORD", "CORE", "CORK", "CORN", "COST", "COZY", "CREW", "CROP", "CROW", "CUBE", "CUFF", "CURL", "CUTE", "DAME", "DARE", "DARK", "DART", "DATA", "DATE", "DAWN", "DAYS", "DAZE", "DEAD", "DEAL", "DEAN", "DEAR", "DEBT", "DECK", "DEED", "DEEP", "DEER", "DEFT", "DENY", "DESK", "DIAL", "DIET", "DIRE", "DIRT", "DISC", "DISH", "DISK", "DIVE", "DOCK", "DOLE", "DOME", "DONE", "DOOR", "DOSE", "DOVE", "DOWN", "DRAG", "DRAW", "DRIP", "DROP", "DRUM", "DUAL", "DUEL", "DUMB", "DUNE", "DUSK", "DUST", "DUTY", "EACH", "EARL", "EARN", "EASE", "EAST", "EDGE", "EMIT", "ENVY", "EPIC", "EVEN", "EVER", "EVIL", "EXAM", "FACE", "FACT", "FADE", "FAIL", "FAIR", "FAKE", "FALL", "FAME", "FARE", "FARM", "FAST", "FATE", "FEAR", "FEAT", "FEEL", "FEET", "FELL", "FELT", "FERN", "FILE", "FILL", "FILM", "FIND", "FINE", "FIRE", "FIRM", "FISH", "FIST", "FLAG", "FLED", "FLOW", "FOAM", "FOIL", "FOLK", "FOND", "FOOD", "FOOL", "FOOT", "FORD", "FORK", "FORM", "FORT", "FOUL", "FOUR", "FREE", "FUEL", "FULL", "FUND", "FURY", "GALE", "GAME", "GANG", "GAZE", "GIFT", "GIRL", "GIVE", "GLAD", "GLEE", "GLOW", "GLUE", "GOAL", "GOAT", "GOLD", "GONE", "GOOD", "GORE", "GOWN", "GRAM", "GROW", "GULF", "GULL", "GULP", "GUST", "HACK", "HAIL", "HAIR", "HALE", "HALF", "HALL", "HALO", "HALT", "HAND", "HANG", "HARD", "HARE", "HARM", "HARP", "HASH", "HATE", "HAUL", "HAVE", "HAWK", "HAZE", "HEAD", "HEAL", "HEAP", "HEAR", "HEAT", "HEED", "HEEL", "HELP", "HERB", "HERD", "HERE", "HERO", "HIDE", "HIGH", "HIKE", "HILL", "HINT", "HIRE", "HISS", "HOAX", "HOLE", "HOME", "HOOD", "HOOK", "HOPE", "HORN", "HOST", "HOUR", "HUGE", "HULL", "HUMP", "HUNG", "HUNT", "HURL", "HURT", "ICON", "IDEA", "IDLE", "INCH", "INTO", "IRON", "JADE", "JAIL", "JEAN", "JERK", "JOIN", "JOKE", "JOLT", "JUNK", "JURY", "JUST", "KEEN", "KEEP", "KICK", "KIND", "KING", "KNOT", "KNOW", "LACE", "LACK", "LAME", "LAND", "LANE", "LARK", "LASH", "LAST", "LATE", "LAVA", "LAWN", "LAZY", "LEAD", "LEAF", "LEAK", "LEAN", "LEAP", "LEND", "LENT", "LESS", "LICK", "LIFE", "LIFT", "LIKE", "LIMB", "LIME", "LIMP", "LINE", "LINK", "LION", "LIST", "LIVE", "LOAD", "LOAF", "LOAN", "LOCK", "LOFT", "LONE", "LONG", "LOOK", "LOOM", "LOOP", "LORE", "LOSS", "LOST", "LOUD", "LOVE", "LUCK", "LULL", "LUNG", "LURK", "LUST", "MADE", "MAIL", "MAIN", "MAKE", "MALE", "MALL", "MALT", "MANY", "MARK", "MAST", "MATE", "MATH", "MAZE", "MEAL", "MEAN", "MEAT", "MEET", "MELT", "MENU", "MERE", "MESH", "MILE", "MILK", "MILL", "MIND", "MINE", "MINT", "MISS", "MIST", "MOAT", "MOCK", "MOLD", "MOLE", "MONK", "MOOD", "MOON", "MOOR", "MORE", "MOST", "MOTH", "MOVE", "MUCH", "MUSE", "MUSK", "MUST", "MUTE", "MYTH", "NAIL", "NAME", "NAPE", "NAVY", "NEAR", "NEAT", "NECK", "NEED", "NEST", "NEWS", "NEXT", "NICE", "NICK", "NINE", "NODE", "NONE", "NOON", "NORM", "NOSE", "NOTE", "NULL", "OATH", "ODDS", "OMEN", "ONCE", "ONLY", "OPEN", "OVEN", "OVER", "PACE", "PACK", "PAGE", "PAIN", "PAIR", "PALE", "PALM", "PARK", "PART", "PASS", "PAST", "PATH", "PEAK", "PEAR", "PEEL", "PEER", "PELT", "PEST", "PICK", "PILE", "PILL", "PINE", "PIPE", "POEM", "POET", "POLE", "POND", "POOL", "POOR", "PORE", "PORK", "PORT", "POSE", "POST", "POUR", "PROD", "PROP", "PULL", "PULP", "PUMP", "PURE", "PUSH", "RACE", "RAGE", "RAID", "RAIL", "RAIN", "RAKE", "RANG", "RANK", "RARE", "RASH", "RATE", "RAVE", "READ", "REAL", "REAP", "REAR", "REEL", "RELY", "REND", "RENT", "REST", "RICE", "RICH", "RIDE", "RING", "RIOT", "RIPE", "RISE", "RISK", "ROAM", "ROAR", "ROBE", "ROCK", "RODE", "ROLE", "ROLL", "ROOF", "ROOM", "ROOT", "ROPE", "ROSE", "RULE", "RUNE", "RUSH", "RUST", "SAGE", "SAKE", "SALE", "SALT", "SAME", "SANE", "SANG", "SANK", "SAVE", "SEAL", "SEAM", "SEED", "SEEK", "SEEM", "SEEP", "SELF", "SELL", "SEND", "SENT", "SILK", "SING", "SINK", "SITE", "SIZE", "SKIN", "SLAB", "SLAM", "SLID", "SLIM", "SLIP", "SLOT", "SLOW", "SLUG", "SNAG", "SNAP", "SNIP", "SNOW", "SOAK", "SOAP", "SOAR", "SOCK", "SOFT", "SOIL", "SOLE", "SOME", "SONG", "SOON", "SORE", "SORT", "SOUL", "SOUP", "SOUR", "SPIN", "SPIT", "SPOT", "STAR", "STAY", "STEM", "STEP", "STEW", "STIR", "STOP", "STUB", "STUN", "SUCH", "SUIT", "SUNG", "SUNK", "SURF", "SWAN", "SWAP", "SWAY", "TALE", "TALK", "TALL", "TAME", "TANG", "TART", "TASK", "TEAR", "TEAL", "TELL", "TEND", "TENT", "TERM", "TEST", "THAN", "THAT", "THEM", "THEN", "THEY", "THIN", "THIS", "TIDE", "TIME", "TINY", "TIRE", "TOAD", "TOLL", "TONE", "TOOK", "TOOL", "TORN", "TOSS", "TOUR", "TOWN", "TRAP", "TRAY", "TREE", "TRIM", "TRIO", "TRIP", "TROD", "TROT", "TRUE", "TUBE", "TUCK", "TUNA", "TUNE", "TURF", "TURN", "UGLY", "UNDO", "UNIT", "UPON", "URGE", "USER", "VALE", "VANE", "VARY", "VAST", "VEIL", "VEIN", "VERB", "VERY", "VEST", "VETO", "VICE", "VILE", "VINE", "VOID", "VOLT", "VOTE", "WADE", "WAGE", "WAIL", "WAIT", "WAKE", "WALK", "WALL", "WAND", "WANE", "WARD", "WARE", "WARM", "WARN", "WAVE", "WEAK", "WEAR", "WEED", "WEEK", "WELD", "WELL", "WENT", "WERE", "WEST", "WIDE", "WIFE", "WILD", "WILL", "WIND", "WINE", "WING", "WINK", "WIRE", "WISE", "WISH", "WITH", "WOLF", "WOOD", "WOOL", "WORD", "WORE", "WORK", "WORM", "WORN", "YARD", "YARN", "YEAR", "YELL", "YOGA", "YOUR", "ZEAL", "ZERO", "ZEST", "ZONE", "ZOOM", "ABOUT", "ABOVE", "ACORN", "ACUTE", "ADMIT", "ADOPT", "ADULT", "AFTER", "AGAIN", "AGENT", "AGONY", "AGREE", "AHEAD", "AISLE", "ALARM", "ALBUM", "ALERT", "ALIKE", "ALIVE", "ALLEY", "ALLOW", "ALONE", "ALONG", "ALTER", "ANGEL", "ANGER", "ANGLE", "ANNEX", "APART", "APPLE", "APPLY", "APRON", "ARENA", "ARGUE", "ARISE", "ARRAY", "ARROW", "ATLAS", "ATTIC", "AUDIO", "AUDIT", "AVOID", "BADGE", "BASIC", "BASIN", "BEACH", "BEARD", "BEAST", "BEGIN", "BEING", "BELOW", "BENCH", "BIRTH", "BLACK", "BLADE", "BLAME", "BLANK", "BLAST", "BLAZE", "BLEND", "BLESS", "BLIND", "BLOCK", "BLOOD", "BLOOM", "BOARD", "BONUS", "BOOST", "BRACE", "BRAIN", "BRAND", "BRAVE", "BREAK", "BREED", "BRICK", "BRIDE", "BRIEF", "BRING", "BROAD", "BROOM", "BROWN", "BRUSH", "BRUTE", "BUILD", "BUILT", "BUNCH", "BURST", "CABIN", "CANDY", "CARGO", "CARVE", "CEDAR", "CHAIN", "CHAIR", "CHALK", "CHARM", "CHART", "CHASE", "CHEAP", "CHEAT", "CHECK", "CHEEK", "CHEER", "CHESS", "CHEST", "CHIEF", "CHILD", "CHOIR", "CHUNK", "CIVIC", "CIVIL", "CLAIM", "CLASS", "CLEAN", "CLEAR", "CLERK", "CLICK", "CLIFF", "CLING", "CLOCK", "CLONE", "CLOSE", "CLOTH", "CLOUD", "CLOWN", "COACH", "COAST", "COLOR", "COMIC", "COMET", "CORAL", "COULD", "COUNT", "COURT", "COVER", "CRAFT", "CRASH", "CRAZY", "CREAM", "CREEK", "CRIME", "CRISP", "CROSS", "CROWD", "CROWN", "CRUEL", "CRUSH", "CURVE", "CYCLE", "DAILY", "DANCE", "DEATH", "DEBUT", "DECOR", "DELAY", "DELTA", "DENSE", "DEPOT", "DEPTH", "DETER", "DEVIL", "DIARY", "DIRTY", "DISCO", "DIVER", "DIZZY", "DODGE", "DOUBT", "DOUGH", "DRAFT", "DRAIN", "DRAMA", "DRAPE", "DREAM", "DRESS", "DRILL", "DRINK", "DRIVE", "DROVE", "DROWN", "DRUNK", "DYING", "EAGLE", "EARLY", "EARTH", "EIGHT", "EJECT", "ELITE", "EMBER", "EMPTY", "ENEMY", "ENJOY", "ENTER", "ENTRY", "ENVOY", "EQUAL", "ERROR", "ESSAY", "EVADE", "EVENT", "EVERY", "EXACT", "EXTRA", "FABLE", "FAIRY", "FAITH", "FALSE", "FANCY", "FATAL", "FAULT", "FEAST", "FETCH", "FEVER", "FIBER", "FIELD", "FIFTH", "FIFTY", "FIGHT", "FINAL", "FIRST", "FLAME", "FLASK", "FLASH", "FLEET", "FLESH", "FLOAT", "FLOOD", "FLOOR", "FLORA", "FLOUR", "FLUID", "FLUTE", "FOCAL", "FORCE", "FORGE", "FOUND", "FRAME", "FRANK", "FRAUD", "FRESH", "FRONT", "FROWN", "FULLY", "FUNNY", "FUZZY", "GENRE", "GHOST", "GIANT", "GIVEN", "GLOBE", "GLOOM", "GLORY", "GLOSS", "GLOVE", "GOING", "GRACE", "GRADE", "GRAIN", "GRAND", "GRANT", "GRAPH", "GRASP", "GRASS", "GRAVE", "GREAT", "GREED", "GREEN", "GRIEF", "GRILL", "GROAN", "GROVE", "GROWL", "GRUNT", "GUARD", "GUESS", "GUEST", "GUIDE", "GUILD", "GUILT", "GUSTO", "HABIT", "HAPPY", "HARSH", "HEART", "HEAVY", "HEDGE", "HENCE", "HINGE", "HOBBY", "HOLLY", "HONEY", "HONOR", "HORSE", "HOTEL", "HOUND", "HUMAN", "HUMOR", "HURRY", "IDEAL", "IMAGE", "IMPLY", "INDEX", "INDIE", "INFER", "INNER", "INPUT", "IRONY", "JEWEL", "JUDGE", "JUICE", "KARMA", "KNIFE", "KNOCK", "KNOWN", "LABEL", "LANCE", "LARGE", "LASER", "LATER", "LAUGH", "LAYER", "LEARN", "LEAVE", "LEDGE", "LEGAL", "LEMON", "LEVEL", "LIGHT", "LIMIT", "LINEN", "LIVER", "LOCAL", "LOGIC", "LOOSE", "LOVER", "LOWER", "LUCID", "LUNAR", "LYRIC", "MAGIC", "MAJOR", "MAKER", "MANOR", "MAPLE", "MARCH", "MARRY", "MATCH", "MAYOR", "MEDIA", "MERCY", "MERIT", "MICRO", "MIGHT", "MINOR", "MINUS", "MIXED", "MODEL", "MONEY", "MONTH", "MOODY", "MORAL", "MOUSE", "MOUTH", "MOVIE", "MURKY", "MUSIC", "NAIVE", "NAVAL", "NICHE", "NIGHT", "NOBLE", "NOISE", "NORTH", "NOTED", "NOVEL", "NURSE", "OCCUR", "OCEAN", "OFFER", "OFTEN", "OLIVE", "ORDER", "OTHER", "OUTER", "OZONE", "PAINT", "PANIC", "PAPER", "PATCH", "PAUSE", "PEACE", "PEARL", "PENAL", "PETTY", "PHASE", "PHONE", "PHOTO", "PIANO", "PIECE", "PILOT", "PITCH", "PIXEL", "PLACE", "PLAIN", "PLANE", "PLANT", "PLATE", "PLAZA", "PLEAD", "PLUME", "POINT", "POKER", "POLAR", "POWER", "PRESS", "PRICE", "PRIDE", "PRIME", "PRINT", "PRIOR", "PRIZE", "PROBE", "PRONE", "PROOF", "PROSE", "PROUD", "PROVE", "PROWL", "PUNCH", "PUPIL", "PURSE", "QUERY", "QUEUE", "QUICK", "QUIET", "QUOTA", "QUOTE", "RABBI", "RADAR", "RADIO", "RAINY", "RAISE", "RALLY", "RANCH", "RANGE", "RAPID", "RAVEN", "REACH", "READY", "REALM", "REBEL", "REFER", "REIGN", "RELAX", "RELAY", "RENEW", "REPAY", "REPLY", "RISKY", "RIVAL", "RIVER", "ROBOT", "ROCKY", "ROUGE", "ROUGH", "ROUND", "ROUTE", "ROYAL", "RUGBY", "RULER", "RURAL", "SADLY", "SAINT", "SALAD", "SALON", "SANDY", "SAUCE", "SCARY", "SCENE", "SCOUT", "SCREW", "SENSE", "SERVE", "SEVEN", "SHADE", "SHAFT", "SHALL", "SHAME", "SHAPE", "SHARE", "SHARP", "SHEER", "SHEET", "SHELF", "SHELL", "SHIFT", "SHINE", "SHIRT", "SHOCK", "SHORE", "SHORT", "SIGHT", "SINCE", "SIXTH", "SIXTY", "SKILL", "SKULL", "SLATE", "SLAVE", "SLEEP", "SLIDE", "SLOPE", "SMART", "SMELL", "SMILE", "SMOKE", "SNAKE", "SOLAR", "SOLID", "SOLVE", "SORRY", "SOUTH", "SPACE", "SPARE", "SPARK", "SPEAR", "SPEED", "SPEND", "SPENT", "SPILL", "SPOKE", "SPORT", "SPRAY", "STACK", "STAFF", "STAGE", "STAIN", "STAIR", "STAKE", "STALE", "STALL", "STAMP", "STAND", "STARK", "START", "STATE", "STEAL", "STEAM", "STEEL", "STEEP", "STEER", "STICK", "STIFF", "STILL", "STOCK", "STONE", "STOOD", "STORE", "STORM", "STORY", "STOVE", "STRAP", "STRAW", "STRIP", "STUDY", "STYLE", "SUGAR", "SUITE", "SUNNY", "SUPER", "SURGE", "SWAMP", "SWEET", "SWIPE", "TABLE", "TASTE", "TEACH", "TEMPO", "TENSE", "TENTH", "TERMS", "THORN", "THREE", "THROW", "TIGER", "TIGHT", "TIRED", "TITLE", "TOAST", "TOKEN", "TORCH", "TOTAL", "TOUCH", "TOUGH", "TOWEL", "TOWER", "TOXIC", "TRACE", "TRACK", "TRADE", "TRAIL", "TRAIN", "TRAIT", "TRASH", "TRIAL", "TRIBE", "TRICK", "TROOP", "TROVE", "TRUCE", "TRULY", "TRUNK", "TRUST", "TRUTH", "TWICE", "TWIST", "UMBRA", "UNCUT", "UNDER", "UNIFY", "UNION", "UNITE", "UNITY", "UNTIL", "UPPER", "UPSET", "URBAN", "USAGE", "USHER", "VALID", "VALOR", "VALUE", "VALVE", "VAPOR", "VAULT", "VERSE", "VIDEO", "VIGOR", "VIRAL", "VIRUS", "VISIT", "VISTA", "VITAL", "VIVID", "VOICE", "VOTER", "WAGER", "WASTE", "WATCH", "WATER", "WEARY", "WEAVE", "WEDGE", "WEIRD", "WHALE", "WHEAT", "WHEEL", "WHERE", "WHICH", "WHILE", "WHITE", "WHOLE", "WHOSE", "WIDTH", "WITTY", "WOMAN", "WOMEN", "WORLD", "WORRY", "WORSE", "WORST", "WORTH", "WOULD", "WRATH", "WRITE", "WROTE", "YACHT", "YIELD", "YOUNG", "YOUTH", "ZESTY", "ZIPPY",
+// Extra common words often flagged as missing
+"RATION", "NATION", "RATIO", "TRAIN", "RAIN", "RAINS", "TRAINS", "RANT", "RANTS", "ANTI", "NARC", "NARCO", "TARN", "ARCO", "NARC", "INTRO", "NITRO", "INRO", "IRON", "IRONS", "NOIR", "NORM", "NORI", "RANI", "TORN", "CORN", "HORN", "BORN", "WORN", "MORN", "LORN", "FORA", "HORA", "TORA", "FANO", "INIA", "INTRA", "ANNO", "ANION", "ONION", "MANOR", "MINOR", "MANOR", "TRAIN", "MAIN", "RAIN", "ROAN", "LOAN", "MOAN", "GROAN", "TORC", "SORT", "TORT", "TORS", "RORT", "SNORT", "SHORT", "SPORT", "FORT", "ORTS", "DROIT", "GRIOT", "RIOT", "TRIO"]);
+
+// ── LIVE DICTIONARY CHECK via Free Dictionary API ──
+const dictCache = new Map();
+async function isValidWord(word) {
+  const w = word.toUpperCase();
+  if (FALLBACK.has(w)) return true;
+  if (dictCache.has(w)) return dictCache.get(w);
+  try {
+    const res = await fetch(`https://api.dictionaryapi.dev/api/v2/entries/en/${word.toLowerCase()}`);
+    const valid = res.ok;
+    dictCache.set(w, valid);
+    return valid;
+  } catch {
+    // Offline fallback — trust the word if it looks reasonable
+    dictCache.set(w, true);
+    return true;
+  }
+}
+// ── ARENA THEMES ──
+const THEMES = {
+  ember: { key: 'ember', name: 'Ember Forge', icon: '🔥', actionLabel: 'FORGE', bg: '#0d0f14', surface: '#161a23', surface2: '#1e2330', border: '#2a3045', amber: '#f5a623', amberDim: '#c47d0e', amberGlow: 'rgba(245,166,35,0.12)', teal: '#3ecfb2', red: '#e05a5a', text: '#e8eaf0', textDim: '#6e7a99',
+    font: "'Oswald', sans-serif", fontMono: "'Space Mono', monospace", radius: 8, tracking: '0.01em', glow: '0 0 20px rgba(245,166,35,0.28)',
+    texture: 'radial-gradient(circle at 50% -10%, rgba(245,166,35,0.16), transparent 60%)', textureSize: 'auto' },
+  neon: { key: 'neon', name: 'Neon Arcade', icon: '🕹️', actionLabel: 'ZAP!', bg: '#0a0014', surface: '#160a28', surface2: '#1f0f3a', border: '#3a1f5c', amber: '#ff2bd6', amberDim: '#b81ea0', amberGlow: 'rgba(255,43,214,0.15)', teal: '#19f4ff', red: '#ff4d6d', text: '#f1e8ff', textDim: '#8a7aad',
+    font: "'Press Start 2P', cursive", fontMono: "'Space Mono', monospace", radius: 4, tracking: '0.02em', glow: '0 0 26px rgba(255,43,214,0.5)',
+    texture: 'radial-gradient(circle at 15% 10%, rgba(255,43,214,0.16), transparent 50%), radial-gradient(circle at 85% 90%, rgba(25,244,255,0.14), transparent 50%)', textureSize: 'auto' },
+  royal: { key: 'royal', name: 'Royal Court', icon: '👑', actionLabel: 'DECREE', bg: '#1a1209', surface: '#2a1d10', surface2: '#3a2a16', border: '#5c4226', amber: '#d4af37', amberDim: '#9c7e26', amberGlow: 'rgba(212,175,55,0.15)', teal: '#7a9e7e', red: '#a83232', text: '#f3e9d2', textDim: '#a68a5c',
+    font: "'Cinzel', serif", fontMono: "'Playfair Display', serif", radius: 14, tracking: '0.04em', glow: '0 0 18px rgba(212,175,55,0.32)',
+    texture: 'radial-gradient(circle at 50% 0%, rgba(212,175,55,0.14), transparent 55%)', textureSize: 'auto' },
+  space: { key: 'space', name: 'Deep Space', icon: '🪐', actionLabel: 'LAUNCH', bg: '#070914', surface: '#10142a', surface2: '#171c3a', border: '#2a3262', amber: '#7c9bff', amberDim: '#5170c4', amberGlow: 'rgba(124,155,255,0.15)', teal: '#5ff0d7', red: '#ff5d8f', text: '#e6e9ff', textDim: '#6c74a8',
+    font: "'Orbitron', sans-serif", fontMono: "'Space Mono', monospace", radius: 10, tracking: '0.05em', glow: '0 0 28px rgba(124,155,255,0.42)',
+    texture: 'radial-gradient(1.5px 1.5px at 10% 20%, rgba(255,255,255,0.55) 50%, transparent 50%), radial-gradient(1.5px 1.5px at 80% 60%, rgba(255,255,255,0.45) 50%, transparent 50%), radial-gradient(1px 1px at 40% 80%, rgba(255,255,255,0.5) 50%, transparent 50%), radial-gradient(1.5px 1.5px at 60% 30%, rgba(255,255,255,0.4) 50%, transparent 50%), radial-gradient(1px 1px at 90% 10%, rgba(255,255,255,0.45) 50%, transparent 50%)', textureSize: '220px 220px' },
+  terminal: { key: 'terminal', name: 'Retro Terminal', icon: '🖥️', actionLabel: 'RUN', bg: '#040a04', surface: '#0a160a', surface2: '#0f1f0f', border: '#1f4a1f', amber: '#39ff6a', amberDim: '#1f9a3f', amberGlow: 'rgba(57,255,106,0.15)', teal: '#39ff6a', red: '#ff4444', text: '#c8ffcf', textDim: '#4a8a4a',
+    font: "'VT323', monospace", fontMono: "'VT323', monospace", radius: 2, tracking: '0.02em', glow: '0 0 14px rgba(57,255,106,0.5)',
+    texture: 'repeating-linear-gradient(0deg, rgba(57,255,106,0.06) 0px, rgba(57,255,106,0.06) 1px, transparent 1px, transparent 3px)', textureSize: 'auto' }
+};
+const THEME_ORDER = ['ember', 'neon', 'royal', 'space', 'terminal'];
+function applyTheme(key) {
+  Object.assign(S, THEMES[key] || THEMES.ember);
+}
+let S = { ...THEMES.ember };
+function wordScore(word) {
+  return word.toUpperCase().split('').reduce((s, c) => s + (LV[c] || 0), 0);
+}
+function canMakeWord(word, letters) {
+  const pool = [...letters];
+  for (const ch of word.toUpperCase()) {
+    const idx = pool.indexOf(ch);
+    if (idx === -1) return false;
+    pool.splice(idx, 1);
+  }
+  return true;
+}
+
+// ── HIGH-SCORE / RARE-WORD POPUP ──
+const RARE_LETTERS = new Set(['Q', 'Z', 'X', 'J', 'K']);
+function wordTier(word, pts) {
+  const hasRareLetter = word.split('').some(ch => RARE_LETTERS.has(ch));
+  if (pts >= 20 || word.length >= 7 || hasRareLetter) {
+    return { level: 'legendary', label: 'LEGENDARY WORD', icon: '⚡' };
+  }
+  if (pts >= 13 || word.length >= 6) {
+    return { level: 'great', label: 'Great word!', icon: '🔥' };
+  }
+  if (pts >= 8) {
+    return { level: 'good', label: 'Nice forge!', icon: '✨' };
+  }
+  return null;
+}
+function WordPopup({
+  popup
+}) {
+  if (!popup) return null;
+  const {
+    word,
+    pts,
+    tier
+  } = popup;
+  const big = tier.level === 'legendary';
+  return /*#__PURE__*/React.createElement("div", {
+    style: {
+      position: 'fixed',
+      top: big ? '28%' : '16%',
+      left: '50%',
+      transform: 'translate(-50%, -50%)',
+      zIndex: 999,
+      pointerEvents: 'none',
+      textAlign: 'center',
+      animation: 'popIn 0.35s ease-out, popOut 0.3s ease-in 1.3s forwards'
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontFamily: S.font,
+      fontSize: big ? '1rem' : '0.8rem',
+      fontWeight: 700,
+      letterSpacing: S.tracking,
+      textTransform: 'uppercase',
+      color: tier.level === 'legendary' ? S.amber : tier.level === 'great' ? S.teal : S.text,
+      marginBottom: 4
+    }
+  }, tier.icon, " ", tier.label), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontFamily: S.fontMono,
+      fontWeight: 700,
+      fontSize: big ? '2.6rem' : '1.8rem',
+      color: S.text,
+      textShadow: big ? S.glow : 'none'
+    }
+  }, word, " ", /*#__PURE__*/React.createElement("span", {
+    style: {
+      color: S.amber
+    }
+  }, "+", pts)));
+}
+
+// ── ARENA PICKER ──
+function ArenaPicker({
+  themeKey,
+  onChange
+}) {
+  const idx = THEME_ORDER.indexOf(themeKey);
+  const theme = THEMES[themeKey];
+  function go(dir) {
+    const next = (idx + dir + THEME_ORDER.length) % THEME_ORDER.length;
+    onChange(THEME_ORDER[next]);
+  }
+  const arrowStyle = {
+    width: 30,
+    height: 30,
+    borderRadius: theme.radius,
+    border: `1px solid ${theme.border}`,
+    background: 'transparent',
+    color: theme.textDim,
+    fontSize: '1.1rem',
+    cursor: 'pointer',
+    flexShrink: 0
+  };
+  return /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginBottom: 20,
+      textAlign: 'left'
+    }
+  }, /*#__PURE__*/React.createElement("label", {
+    style: {
+      display: 'block',
+      fontSize: '0.75rem',
+      fontWeight: 600,
+      color: S.textDim,
+      letterSpacing: S.tracking,
+      textTransform: 'uppercase',
+      marginBottom: 6,
+      fontFamily: S.font,
+      transition: 'font-family 0.2s'
+    }
+  }, "Battle Arena"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 10,
+      background: theme.surface2,
+      border: `1.5px solid ${theme.border}`,
+      borderRadius: theme.radius + 4,
+      padding: '10px 12px',
+      boxShadow: theme.glow,
+      transition: 'background 0.3s, border-color 0.3s, border-radius 0.3s, box-shadow 0.3s'
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    onClick: () => go(-1),
+    style: arrowStyle
+  }, "‹"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      flex: 1,
+      textAlign: 'center'
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: '1.3rem',
+      marginBottom: 2
+    }
+  }, theme.icon), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontFamily: theme.font,
+      letterSpacing: theme.tracking,
+      fontWeight: 700,
+      fontSize: '0.85rem',
+      color: theme.text
+    }
+  }, theme.name), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      justifyContent: 'center',
+      gap: 4,
+      marginTop: 6
+    }
+  }, [theme.bg, theme.surface2, theme.amber, theme.teal].map((c, i) => /*#__PURE__*/React.createElement("span", {
+    key: i,
+    style: {
+      width: 14,
+      height: 14,
+      borderRadius: 4,
+      background: c,
+      border: `1px solid ${theme.border}`,
+      display: 'inline-block'
+    }
+  })))), /*#__PURE__*/React.createElement("button", {
+    onClick: () => go(1),
+    style: arrowStyle
+  }, "›")), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      justifyContent: 'center',
+      gap: 6,
+      marginTop: 8
+    }
+  }, THEME_ORDER.map(k => /*#__PURE__*/React.createElement("span", {
+    key: k,
+    onClick: () => onChange(k),
+    style: {
+      width: 7,
+      height: 7,
+      borderRadius: '50%',
+      cursor: 'pointer',
+      display: 'inline-block',
+      background: k === themeKey ? theme.amber : theme.border
+    }
+  }))));
+}
+
+// ── LOGO MARK (per-arena flourish) ──
+function LogoMark() {
+  const flourish = S.key === 'royal' ? '❖' : null;
+  return /*#__PURE__*/React.createElement("span", {
+    style: { display: 'inline-flex', alignItems: 'center', gap: '0.25em' }
+  },
+  flourish && /*#__PURE__*/React.createElement("span", { style: { color: S.amber, fontSize: '0.55em' } }, flourish),
+  /*#__PURE__*/React.createElement("span", null,
+    "Word",
+    /*#__PURE__*/React.createElement("span", {
+      style: {
+        color: S.amber,
+        animation: S.key === 'neon' ? 'neonFlicker 2.4s infinite' : 'none'
+      }
+    }, "Forge"),
+    S.key === 'terminal' && /*#__PURE__*/React.createElement("span", { style: { color: S.amber, animation: 'blink 1s infinite' } }, "_"),
+    S.key === 'space' && /*#__PURE__*/React.createElement("span", { style: { color: S.teal, animation: 'blink 2.2s infinite', marginLeft: '0.2em' } }, "•")
+  ),
+  flourish && /*#__PURE__*/React.createElement("span", { style: { color: S.amber, fontSize: '0.55em' } }, flourish));
+}
+
+// ── TILE ──
+function Tile({
+  ch,
+  idx,
+  visible
+}) {
+  return /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontFamily: S.fontMono,
+      fontSize: '1.2rem',
+      fontWeight: 700,
+      width: 44,
+      height: 44,
+      borderRadius: S.radius,
+      border: `1.5px solid ${S.border}`,
+      background: S.surface2,
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      color: S.text,
+      position: 'relative',
+      opacity: visible ? 1 : 0,
+      transform: visible ? 'translateY(0)' : 'translateY(-10px)',
+      transition: `opacity 0.3s ${idx * 55}ms, transform 0.3s ${idx * 55}ms, font-family 0.2s, border-radius 0.2s`,
+      flexShrink: 0
+    }
+  }, ch, /*#__PURE__*/React.createElement("span", {
+    style: {
+      position: 'absolute',
+      bottom: 2,
+      right: 4,
+      fontSize: '0.5rem',
+      color: S.textDim,
+      fontFamily: S.fontMono
+    }
+  }, LV[ch] || 0));
+}
+
+// ── ONLINE LOBBY (cross-device create/join room) ──
+function OnlineSetup({ onStart, initialJoinCode }) {
+  const [tab, setTab] = useState(initialJoinCode ? 'join' : 'create');
+  const [phrase, setPhrase] = useState('');
+  const [time, setTime] = useState('120');
+  const [duplicateMode, setDuplicateMode] = useState('exclusive');
+  const [maxPlayers, setMaxPlayers] = useState(2);
+  const [yourName, setYourName] = useState('');
+  const [joinCode, setJoinCode] = useState(initialJoinCode || '');
+  const [roomCode, setRoomCode] = useState(null);
+  const [myPlayerNum, setMyPlayerNum] = useState(null);
+  const [room, setRoom] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+  const [linkCopied, setLinkCopied] = useState(false);
+  const startedRef = useRef(false);
+  const unsubRef = useRef(null);
+  const autoStartedRef = useRef(false);
+
+  useEffect(() => {
+    return () => {
+      if (unsubRef.current) unsubRef.current();
+    };
+  }, []);
+
+  // Host-only: once every seat is filled and every present player has opted
+  // in via the Ready button, kick off the round automatically — no separate
+  // "Start Round" click.
+  useEffect(() => {
+    if (myPlayerNum !== 1 || !room || autoStartedRef.current) return;
+    if (room.status !== 'waiting') return;
+    const mp = room.maxPlayers || 2;
+    let allFilled = true;
+    let allReady = true;
+    for (let i = 1; i <= mp; i++) {
+      const p = room.players && room.players[String(i)];
+      if (!p) { allFilled = false; break; }
+      if (!(room.ready && room.ready[String(i)])) allReady = false;
+    }
+    if (allFilled && allReady) {
+      autoStartedRef.current = true;
+      startRoom(roomCode).catch(e => {
+        autoStartedRef.current = false;
+        setErr(e.message || 'Could not start the round.');
+      });
+    }
+  }, [room, myPlayerNum, roomCode]);
+
+  async function toggleReady() {
+    if (!roomCode || !myPlayerNum) return;
+    const currentlyReady = !!(room && room.ready && room.ready[String(myPlayerNum)]);
+    try {
+      await setReady(roomCode, myPlayerNum, !currentlyReady);
+    } catch (e) {
+      setErr('Could not update ready status — try again.');
+    }
+  }
+
+  function copyInviteLink() {
+    if (!roomCode) return;
+    const url = `${window.location.origin}${window.location.pathname}?room=${roomCode}`;
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(url).then(() => {
+        setLinkCopied(true);
+        setTimeout(() => setLinkCopied(false), 2200);
+      }).catch(() => setErr('Could not copy the link — copy it from the address bar instead.'));
+    }
+  }
+
+  function subscribe(code, num) {
+    if (unsubRef.current) unsubRef.current();
+    unsubRef.current = listenToRoom(code, data => {
+      setRoom(data);
+      if (data.status === 'active' && !startedRef.current) {
+        startedRef.current = true;
+        const mp = data.maxPlayers || 2;
+        const playerNames = {};
+        for (let i = 1; i <= mp; i++) {
+          const p = data.players && data.players[String(i)];
+          playerNames[i] = p ? p.name : `Player ${i}`;
+        }
+        onStart({
+          phrase: data.phrase,
+          totalSecs: data.totalSecs,
+          mode: 'online',
+          roomCode: code,
+          myPlayerNum: num,
+          maxPlayers: mp,
+          playerNames,
+          duplicateMode: data.duplicateMode || 'exclusive'
+        });
+      }
+    });
+  }
+
+  async function doCreate() {
+    const clean = phrase.trim().toUpperCase();
+    if (!clean || clean.replace(/\s/g, '').length < 3) {
+      setErr('Enter a word or phrase with at least 3 letters.');
+      return;
+    }
+    if (!yourName.trim()) {
+      setErr('Enter your name.');
+      return;
+    }
+    setErr('');
+    setBusy(true);
+    try {
+      const code = await createRoom({ phrase: clean, totalSecs: parseInt(time), yourName: yourName.trim(), duplicateMode, maxPlayers });
+      setRoomCode(code);
+      setMyPlayerNum(1);
+      subscribe(code, 1);
+    } catch (e) {
+      setErr(e.message || 'Could not create the room.');
+    }
+    setBusy(false);
+  }
+
+  async function doJoin() {
+    if (!joinCode.trim()) {
+      setErr('Enter the room code.');
+      return;
+    }
+    if (!yourName.trim()) {
+      setErr('Enter your name.');
+      return;
+    }
+    setErr('');
+    setBusy(true);
+    try {
+      const { code, slot } = await joinRoom(joinCode, yourName.trim());
+      setRoomCode(code);
+      setMyPlayerNum(slot);
+      subscribe(code, slot);
+    } catch (e) {
+      setErr(e.message || 'Could not join that room.');
+    }
+    setBusy(false);
+  }
+
+  const inputStyle = {
+    width: '100%',
+    background: S.surface2,
+    border: `1px solid ${S.border}`,
+    borderRadius: S.radius,
+    color: S.text,
+    fontFamily: S.fontMono,
+    fontSize: '1rem',
+    padding: '10px 14px',
+    outline: 'none'
+  };
+  const labelStyle = {
+    display: 'block',
+    fontSize: '0.75rem',
+    fontWeight: 600,
+    color: S.textDim,
+    letterSpacing: S.tracking,
+    textTransform: 'uppercase',
+    marginBottom: 6,
+    fontFamily: S.font
+  };
+
+  // Already in a room — show the waiting/lobby panel
+  if (roomCode) {
+    const mp = (room && room.maxPlayers) || maxPlayers || 2;
+    const slots = [];
+    for (let i = 1; i <= mp; i++) {
+      const p = room && room.players ? room.players[String(i)] : null;
+      const ready = !!(room && room.ready && room.ready[String(i)]);
+      slots.push({ num: i, player: p, ready });
+    }
+    const othersFilled = slots.filter(s => s.num !== myPlayerNum);
+    const allOthersPresent = othersFilled.every(s => !!s.player);
+    const myReady = !!(room && room.ready && room.ready[String(myPlayerNum)]);
+    const waitingOnNames = othersFilled.filter(s => s.player && !s.ready).map(s => s.player.name);
+    return /*#__PURE__*/React.createElement("div", {
+      style: { background: S.surface2, border: `1px solid ${S.border}`, borderRadius: S.radius + 4, padding: 20, textAlign: 'center' }
+    },
+    /*#__PURE__*/React.createElement("div", { style: { fontSize: '0.78rem', color: S.textDim, marginBottom: 6, fontFamily: S.font } }, "ROOM CODE"),
+    /*#__PURE__*/React.createElement("div", { style: { fontFamily: S.fontMono, fontSize: '2.2rem', fontWeight: 700, letterSpacing: '0.15em', color: S.amber, marginBottom: 10 } }, roomCode),
+    myPlayerNum === 1 && /*#__PURE__*/React.createElement("button", {
+      onClick: copyInviteLink,
+      style: {
+        display: 'inline-flex', alignItems: 'center', gap: 6, margin: '0 0 14px',
+        padding: '7px 14px', borderRadius: 99, border: `1px solid ${S.border}`,
+        background: linkCopied ? S.teal : 'transparent', color: linkCopied ? '#0d0f14' : S.textDim,
+        fontFamily: S.font, fontWeight: 600, fontSize: '0.78rem', cursor: 'pointer'
+      }
+    }, linkCopied ? '✓ Link Copied!' : '🔗 Copy Invite Link'),
+    /*#__PURE__*/React.createElement("div", { style: { fontSize: '0.82rem', color: S.textDim, marginBottom: 16 } },
+      myPlayerNum === 1 ? `Share the code or link with your ${mp - 1 === 1 ? 'opponent' : 'opponents'} — then everyone mark ready below.` : `You're in! Mark yourself ready when you're set.`
+    ),
+    /*#__PURE__*/React.createElement("div", { style: { display: 'flex', flexWrap: 'wrap', justifyContent: 'center', gap: 16, marginBottom: 16 } },
+      slots.map(s => /*#__PURE__*/React.createElement("div", {
+        key: s.num,
+        style: { fontSize: '0.85rem', color: s.player ? (s.num === myPlayerNum ? S.text : S.teal) : S.textDim }
+      }, "👤 ", s.player ? s.player.name : 'waiting…', " ", s.ready ? '✅' : ''))
+    ),
+    allOthersPresent ? /*#__PURE__*/React.createElement("button", {
+      onClick: toggleReady,
+      disabled: busy,
+      style: {
+        width: '100%', padding: '13px 0', borderRadius: S.radius + 1, border: 'none',
+        background: myReady ? S.teal : S.amber, color: '#0d0f14',
+        fontFamily: S.font, fontSize: '0.95rem', fontWeight: 700, cursor: 'pointer'
+      }
+    }, myReady ? `✓ Ready — waiting for ${waitingOnNames.length ? waitingOnNames.join(', ') : 'others'}…` : "I'm Ready →") :
+      /*#__PURE__*/React.createElement("div", {
+        style: {
+          width: '100%', padding: '13px 0', borderRadius: S.radius + 1,
+          background: S.border, color: S.textDim, fontFamily: S.font, fontSize: '0.95rem', fontWeight: 700
+        }
+      }, 'Waiting for more players…'),
+    allOthersPresent && !myReady && waitingOnNames.length === 0 && othersFilled.length > 0 && /*#__PURE__*/React.createElement("p", { style: { color: S.teal, fontSize: '0.78rem', marginTop: 10 } }, "Everyone else is ready and waiting on you!"),
+    err && /*#__PURE__*/React.createElement("p", { style: { color: S.red, fontSize: '0.82rem', marginTop: 10 } }, err));
+  }
+
+  return /*#__PURE__*/React.createElement("div", null,
+    /*#__PURE__*/React.createElement("div", { style: { display: 'flex', gap: 8, marginBottom: 16, justifyContent: 'center' } },
+      ['create', 'join'].map(t => /*#__PURE__*/React.createElement("button", {
+        key: t,
+        onClick: () => { setTab(t); setErr(''); },
+        style: {
+          padding: '7px 18px', borderRadius: S.radius, border: `1px solid ${tab === t ? S.amber : S.border}`,
+          background: tab === t ? S.amber : 'transparent', color: tab === t ? '#0d0f14' : S.textDim,
+          fontFamily: S.font, fontWeight: 600, fontSize: '0.8rem', cursor: 'pointer'
+        }
+      }, t === 'create' ? 'Create Room' : 'Join Room'))
+    ),
+    tab === 'create' ? /*#__PURE__*/React.createElement(React.Fragment, null,
+      /*#__PURE__*/React.createElement("div", { style: { marginBottom: 12, textAlign: 'left' } },
+        /*#__PURE__*/React.createElement("label", { style: labelStyle }, "Source Word / Phrase"),
+        /*#__PURE__*/React.createElement("input", { value: phrase, onChange: e => setPhrase(e.target.value), placeholder: "e.g. INFORMATION", maxLength: 30, style: inputStyle })
+      ),
+      /*#__PURE__*/React.createElement("div", { style: { marginBottom: 12, textAlign: 'left' } },
+        /*#__PURE__*/React.createElement("label", { style: labelStyle }, "Time Limit"),
+        /*#__PURE__*/React.createElement("select", { value: time, onChange: e => setTime(e.target.value), style: inputStyle },
+          /*#__PURE__*/React.createElement("option", { value: "60" }, "1 minute"),
+          /*#__PURE__*/React.createElement("option", { value: "120" }, "2 minutes"),
+          /*#__PURE__*/React.createElement("option", { value: "180" }, "3 minutes")
+        )
+      ),
+      /*#__PURE__*/React.createElement("div", { style: { marginBottom: 12, textAlign: 'left' } },
+        /*#__PURE__*/React.createElement("label", { style: labelStyle }, "Duplicate Words"),
+        /*#__PURE__*/React.createElement("select", { value: duplicateMode, onChange: e => setDuplicateMode(e.target.value), style: inputStyle },
+          /*#__PURE__*/React.createElement("option", { value: "exclusive" }, "Exclusive — first to find it wins"),
+          /*#__PURE__*/React.createElement("option", { value: "half" }, "Half Points — 2nd finder gets half"),
+          /*#__PURE__*/React.createElement("option", { value: "shared" }, "Shared — both score full points")
+        ),
+        /*#__PURE__*/React.createElement("p", { style: { fontSize: '0.72rem', color: S.textDim, marginTop: 4 } },
+          duplicateMode === 'exclusive' ? "Once one player finds a word, the other can't score it too." :
+          duplicateMode === 'half' ? "Whoever finds a word second still scores — at half points." :
+          "Less competitive: both players can score the same word in full."
+        )
+      ),
+      /*#__PURE__*/React.createElement("div", { style: { marginBottom: 12, textAlign: 'left' } },
+        /*#__PURE__*/React.createElement("label", { style: labelStyle }, "Players"),
+        /*#__PURE__*/React.createElement("select", { value: maxPlayers, onChange: e => setMaxPlayers(parseInt(e.target.value)), style: inputStyle },
+          /*#__PURE__*/React.createElement("option", { value: 2 }, "2 Players"),
+          /*#__PURE__*/React.createElement("option", { value: 3 }, "3 Players")
+        )
+      ),
+      /*#__PURE__*/React.createElement("div", { style: { marginBottom: 16, textAlign: 'left' } },
+        /*#__PURE__*/React.createElement("label", { style: labelStyle }, "Your Name"),
+        /*#__PURE__*/React.createElement("input", { value: yourName, onChange: e => setYourName(e.target.value), placeholder: "Player 1", style: inputStyle })
+      ),
+      err && /*#__PURE__*/React.createElement("p", { style: { color: S.red, fontSize: '0.82rem', marginBottom: 10 } }, err),
+      /*#__PURE__*/React.createElement("button", {
+        onClick: doCreate, disabled: busy,
+        style: { width: '100%', padding: '13px 0', borderRadius: S.radius + 1, border: 'none', background: S.amber, color: '#0d0f14', fontFamily: S.font, fontSize: '0.95rem', fontWeight: 700, cursor: busy ? 'not-allowed' : 'pointer', opacity: busy ? 0.6 : 1 }
+      }, busy ? 'Creating…' : 'Create Room →')
+    ) : /*#__PURE__*/React.createElement(React.Fragment, null,
+      /*#__PURE__*/React.createElement("div", { style: { marginBottom: 12, textAlign: 'left' } },
+        /*#__PURE__*/React.createElement("label", { style: labelStyle }, "Room Code"),
+        /*#__PURE__*/React.createElement("input", { value: joinCode, onChange: e => setJoinCode(e.target.value.toUpperCase()), placeholder: "e.g. KX7M", maxLength: 6, style: { ...inputStyle, textTransform: 'uppercase', letterSpacing: '0.15em' } })
+      ),
+      /*#__PURE__*/React.createElement("div", { style: { marginBottom: 16, textAlign: 'left' } },
+        /*#__PURE__*/React.createElement("label", { style: labelStyle }, "Your Name"),
+        /*#__PURE__*/React.createElement("input", { value: yourName, onChange: e => setYourName(e.target.value), placeholder: "Player 2", style: inputStyle })
+      ),
+      err && /*#__PURE__*/React.createElement("p", { style: { color: S.red, fontSize: '0.82rem', marginBottom: 10 } }, err),
+      /*#__PURE__*/React.createElement("button", {
+        onClick: doJoin, disabled: busy,
+        style: { width: '100%', padding: '13px 0', borderRadius: S.radius + 1, border: 'none', background: S.amber, color: '#0d0f14', fontFamily: S.font, fontSize: '0.95rem', fontWeight: 700, cursor: busy ? 'not-allowed' : 'pointer', opacity: busy ? 0.6 : 1 }
+      }, busy ? 'Joining…' : 'Join Room →')
+    )
+  );
+}
+
+// ── SPECTATE LOBBY (read-only join — no player slot claimed) ──
+function SpectateSetup({ onStart }) {
+  const [joinCode, setJoinCode] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+
+  const inputStyle = {
+    width: '100%',
+    background: S.surface2,
+    border: `1px solid ${S.border}`,
+    borderRadius: S.radius,
+    color: S.text,
+    fontFamily: S.fontMono,
+    fontSize: '1rem',
+    padding: '10px 14px',
+    outline: 'none'
+  };
+  const labelStyle = {
+    display: 'block',
+    fontSize: '0.75rem',
+    fontWeight: 600,
+    color: S.textDim,
+    letterSpacing: S.tracking,
+    textTransform: 'uppercase',
+    marginBottom: 6,
+    fontFamily: S.font
+  };
+
+  async function doWatch() {
+    if (!joinCode.trim()) {
+      setErr('Enter the room code.');
+      return;
+    }
+    setErr('');
+    setBusy(true);
+    try {
+      const code = await peekRoom(joinCode);
+      onStart({ mode: 'spectate', roomCode: code });
+    } catch (e) {
+      setErr(e.message || 'Could not find that room.');
+    }
+    setBusy(false);
+  }
+
+  return /*#__PURE__*/React.createElement("div", null,
+    /*#__PURE__*/React.createElement("div", { style: { marginBottom: 12, textAlign: 'left' } },
+      /*#__PURE__*/React.createElement("label", { style: labelStyle }, "Room Code"),
+      /*#__PURE__*/React.createElement("input", {
+        value: joinCode,
+        onChange: e => setJoinCode(e.target.value.toUpperCase()),
+        placeholder: "e.g. KX7M",
+        maxLength: 6,
+        onKeyDown: e => e.key === 'Enter' && doWatch(),
+        style: { ...inputStyle, textTransform: 'uppercase', letterSpacing: '0.15em' }
+      })
+    ),
+    /*#__PURE__*/React.createElement("p", { style: { fontSize: '0.78rem', color: S.textDim, marginBottom: 16, lineHeight: 1.5 } },
+      "View-only — pull this up on a separate screen (great for streaming) while two players battle from their own phones. No name or player slot needed."
+    ),
+    err && /*#__PURE__*/React.createElement("p", { style: { color: S.red, fontSize: '0.82rem', marginBottom: 10 } }, err),
+    /*#__PURE__*/React.createElement("button", {
+      onClick: doWatch, disabled: busy,
+      style: { width: '100%', padding: '13px 0', borderRadius: S.radius + 1, border: 'none', background: S.amber, color: '#0d0f14', fontFamily: S.font, fontSize: '0.95rem', fontWeight: 700, cursor: busy ? 'not-allowed' : 'pointer', opacity: busy ? 0.6 : 1 }
+    }, busy ? 'Finding Room…' : '\ud83d\udc41 Watch Room \u2192')
+  );
+}
+
+// ── SETUP ──
+function SetupScreen({
+  onStart,
+  themeKey,
+  onThemeChange
+}) {
+  const [phrase, setPhrase] = useState('');
+  const [p1, setP1] = useState('');
+  const [p2, setP2] = useState('');
+  const [time, setTime] = useState('120');
+  // A shared invite link (?room=CODE) should drop the recipient straight
+  // into Online → Join with the code pre-filled, instead of making them
+  // copy/paste or retype it by hand.
+  const [initialJoinCode] = useState(() => {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      return (params.get('room') || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 6);
+    } catch (e) {
+      return '';
+    }
+  });
+  const [mode, setMode] = useState(() => initialJoinCode ? 'online' : 'sync');
+  const [err, setErr] = useState('');
+  useEffect(() => {
+    if (initialJoinCode && window.history && window.history.replaceState) {
+      window.history.replaceState({}, '', window.location.pathname);
+    }
+  }, []);
+  function start() {
+    const clean = phrase.trim().toUpperCase();
+    if (!clean || clean.replace(/\s/g, '').length < 3) {
+      setErr('Please enter a word or phrase with at least 3 letters.');
+      return;
+    }
+    setErr('');
+    onStart({
+      phrase: clean,
+      p1Name: p1.trim() || 'Player 1',
+      p2Name: p2.trim() || 'Player 2',
+      totalSecs: parseInt(time),
+      mode
+    });
+  }
+  const inputStyle = {
+    width: '100%',
+    background: S.surface2,
+    border: `1px solid ${S.border}`,
+    borderRadius: S.radius,
+    color: S.text,
+    fontFamily: S.fontMono,
+    fontSize: '1rem',
+    padding: '10px 14px',
+    outline: 'none'
+  };
+  const labelStyle = {
+    display: 'block',
+    fontSize: '0.75rem',
+    fontWeight: 600,
+    color: S.textDim,
+    letterSpacing: S.tracking,
+    textTransform: 'uppercase',
+    marginBottom: 6,
+    fontFamily: S.font,
+    transition: 'font-family 0.2s'
+  };
+  return /*#__PURE__*/React.createElement("div", {
+    style: {
+      maxWidth: 480,
+      margin: '40px auto 0',
+      textAlign: 'center',
+      padding: '0 8px'
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontFamily: S.font,
+      letterSpacing: S.tracking,
+      fontSize: '1.8rem',
+      fontWeight: 700,
+      marginBottom: 4,
+      transition: 'font-family 0.2s'
+    }
+  }, /*#__PURE__*/React.createElement(LogoMark, null)), /*#__PURE__*/React.createElement("p", {
+    style: {
+      color: S.textDim,
+      fontSize: '0.88rem',
+      marginBottom: 28
+    }
+  }, "Form words from letters inside a word or phrase. Most points wins."), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 8,
+      marginBottom: 12,
+      justifyContent: 'center'
+    }
+  }, ['sync', 'async', 'online', 'spectate'].map(m => /*#__PURE__*/React.createElement("button", {
+    key: m,
+    onClick: () => setMode(m),
+    style: {
+      padding: '7px 20px',
+      borderRadius: S.radius,
+      border: `1px solid ${mode === m ? S.amber : S.border}`,
+      background: mode === m ? S.amber : 'transparent',
+      color: mode === m ? '#0d0f14' : S.textDim,
+      fontFamily: S.font,
+      fontWeight: 600,
+      fontSize: '0.8rem',
+      cursor: 'pointer',
+      transition: 'font-family 0.2s, border-radius 0.2s'
+    }
+  }, m === 'sync' ? '⚡ Sync' : m === 'async' ? '⏱ Async' : m === 'online' ? '🌐 Online' : '👁 Spectate'))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      background: S.surface2,
+      border: `1px solid ${S.border}`,
+      borderRadius: 8,
+      padding: '10px 14px',
+      marginBottom: 20,
+      textAlign: 'left'
+    }
+  }, mode === 'sync' ? /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: '0.78rem',
+      fontWeight: 700,
+      color: S.amber,
+      marginBottom: 3,
+      fontFamily: S.font,
+      letterSpacing: S.tracking,
+      transition: 'font-family 0.2s'
+    }
+  }, "⚡ Simultaneous Play"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: '0.8rem',
+      color: S.textDim,
+      lineHeight: 1.5
+    }
+  }, "Both players play at the same time on the same screen. Pass a device back and forth, or play side-by-side on the honor system. Whoever scores more before the timer runs out wins.")) : mode === 'async' ? /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: '0.78rem',
+      fontWeight: 700,
+      color: S.amber,
+      marginBottom: 3,
+      fontFamily: S.font,
+      letterSpacing: S.tracking,
+      transition: 'font-family 0.2s'
+    }
+  }, "⏱ Take Turns"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: '0.8rem',
+      color: S.textDim,
+      lineHeight: 1.5
+    }
+  }, "Player 1 goes first with a full timer. When their turn ends, the timer resets to the same amount of time for Player 2. Any word Player 1 already found is locked out and scores zero for Player 2 — so finding words fast matters.")) : mode === 'online' ? /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: '0.78rem',
+      fontWeight: 700,
+      color: S.amber,
+      marginBottom: 3,
+      fontFamily: S.font,
+      letterSpacing: S.tracking,
+      transition: 'font-family 0.2s'
+    }
+  }, "🌐 Play From Two Devices"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: '0.8rem',
+      color: S.textDim,
+      lineHeight: 1.5
+    }
+  }, "One player creates a room and shares the code. The other joins from their own phone or computer. Both play the same phrase at the same time, and scores sync live between devices.")) : /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: '0.78rem',
+      fontWeight: 700,
+      color: S.amber,
+      marginBottom: 3,
+      fontFamily: S.font,
+      letterSpacing: S.tracking,
+      transition: 'font-family 0.2s'
+    }
+  }, "👁 Watch As A Spectator"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: '0.8rem',
+      color: S.textDim,
+      lineHeight: 1.5
+    }
+  }, "Drop into an Online-mode room with just the room code — no player slot, no name needed. Pull up a big live scoreboard, perfect for a second screen, projector, or stream overlay while two players battle from their phones."))), /*#__PURE__*/React.createElement(ArenaPicker, {
+    themeKey: themeKey,
+    onChange: onThemeChange
+  }), mode === 'online' ? /*#__PURE__*/React.createElement(OnlineSetup, { onStart: onStart, initialJoinCode: initialJoinCode }) : mode === 'spectate' ? /*#__PURE__*/React.createElement(SpectateSetup, { onStart: onStart }) : /*#__PURE__*/React.createElement(React.Fragment, null, [{
+    label: 'Source Word / Phrase',
+    val: phrase,
+    set: setPhrase,
+    ph: 'e.g. INFORMATION',
+    max: 30
+  }, {
+    label: 'Player 1 Name',
+    val: p1,
+    set: setP1,
+    ph: 'Player 1'
+  }, {
+    label: 'Player 2 Name',
+    val: p2,
+    set: setP2,
+    ph: 'Player 2'
+  }].map(({
+    label,
+    val,
+    set,
+    ph,
+    max
+  }) => /*#__PURE__*/React.createElement("div", {
+    key: label,
+    style: {
+      marginBottom: 12,
+      textAlign: 'left'
+    }
+  }, /*#__PURE__*/React.createElement("label", {
+    style: labelStyle
+  }, label), /*#__PURE__*/React.createElement("input", {
+    value: val,
+    onChange: e => set(e.target.value),
+    placeholder: ph,
+    maxLength: max,
+    onKeyDown: e => e.key === 'Enter' && start(),
+    style: inputStyle
+  }))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginBottom: 20,
+      textAlign: 'left'
+    }
+  }, /*#__PURE__*/React.createElement("label", {
+    style: labelStyle
+  }, "Time Limit"), /*#__PURE__*/React.createElement("select", {
+    value: time,
+    onChange: e => setTime(e.target.value),
+    style: {
+      ...inputStyle
+    }
+  }, /*#__PURE__*/React.createElement("option", {
+    value: "60"
+  }, "1 minute"), /*#__PURE__*/React.createElement("option", {
+    value: "120"
+  }, "2 minutes"), /*#__PURE__*/React.createElement("option", {
+    value: "180"
+  }, "3 minutes"))), err && /*#__PURE__*/React.createElement("p", {
+    style: {
+      color: S.red,
+      fontSize: '0.82rem',
+      marginBottom: 10
+    }
+  }, err), /*#__PURE__*/React.createElement("button", {
+    onClick: start,
+    style: {
+      width: '100%',
+      padding: '13px 0',
+      borderRadius: S.radius + 1,
+      border: 'none',
+      background: S.amber,
+      color: '#0d0f14',
+      fontFamily: S.font,
+      fontSize: '0.95rem',
+      fontWeight: 700,
+      cursor: 'pointer',
+      boxShadow: S.glow,
+      transition: 'font-family 0.2s, border-radius 0.2s, box-shadow 0.3s'
+    }
+  }, "Start Round →")));
+}
+
+// ── MIC BUTTON ──
+function MicButton({
+  onWord,
+  disabled
+}) {
+  const [listening, setListening] = useState(false);
+  const [supported] = useState(() => 'webkitSpeechRecognition' in window || 'SpeechRecognition' in window);
+  const recRef = useRef(null);
+  // Tracks whether the user *wants* the mic on — lets us tell an intentional
+  // stop apart from the browser auto-ending continuous recognition after a
+  // pause, so we can silently restart and keep "always listening" going.
+  const shouldListenRef = useRef(false);
+
+  function startRecognition() {
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    const rec = new SR();
+    rec.lang = 'en-US';
+    rec.continuous = true;
+    rec.interimResults = false;
+    rec.maxAlternatives = 3;
+    rec.onresult = e => {
+      // Only look at newly-finalized results (resultIndex onward) so a long
+      // continuous session doesn't keep re-submitting earlier words.
+      for (let r = e.resultIndex; r < e.results.length; r++) {
+        const result = e.results[r];
+        if (!result.isFinal) continue;
+        for (let i = 0; i < result.length; i++) {
+          const t = result[i].transcript.trim().toUpperCase().replace(/[^A-Z]/g, '');
+          if (t.length >= 2) {
+            onWord(t);
+            break;
+          }
+        }
+      }
+    };
+    rec.onerror = e => {
+      if (e.error === 'not-allowed' || e.error === 'service-not-allowed') {
+        shouldListenRef.current = false;
+        setListening(false);
+      }
+      // Other errors (e.g. "no-speech") are transient — onend will fire next
+      // and silently restart if the mic is still toggled on.
+    };
+    rec.onend = () => {
+      if (shouldListenRef.current) {
+        // Browsers stop continuous recognition after a period of silence —
+        // restart automatically so the user never has to re-tap the icon.
+        setTimeout(() => {
+          if (shouldListenRef.current) startRecognition();
+        }, 200);
+      } else {
+        setListening(false);
+      }
+    };
+    recRef.current = rec;
+    try {
+      rec.start();
+      setListening(true);
+    } catch {
+      // start() can throw if called too soon after a previous instance —
+      // retry shortly if the mic is still meant to be on.
+      if (shouldListenRef.current) setTimeout(() => startRecognition(), 250);
+    }
+  }
+
+  function toggleMic() {
+    if (!supported) return;
+    if (listening || shouldListenRef.current) {
+      shouldListenRef.current = false;
+      recRef.current?.stop();
+      setListening(false);
+      return;
+    }
+    shouldListenRef.current = true;
+    startRecognition();
+  }
+
+  useEffect(() => {
+    return () => {
+      shouldListenRef.current = false;
+      recRef.current?.stop();
+    };
+  }, []);
+  if (!supported) return null;
+  return /*#__PURE__*/React.createElement("button", {
+    onClick: toggleMic,
+    disabled: disabled,
+    title: listening ? 'Stop listening' : 'Speak a word',
+    style: {
+      width: 46,
+      height: 46,
+      borderRadius: 8,
+      border: `1.5px solid ${listening ? S.amber : S.border}`,
+      background: listening ? S.amberGlow : S.surface2,
+      color: listening ? S.amber : S.textDim,
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      cursor: disabled ? 'not-allowed' : 'pointer',
+      flexShrink: 0,
+      animation: listening ? 'micPulse 1s infinite alternate' : 'none',
+      transition: 'all 0.15s'
+    }
+  }, listening ?
+  /*#__PURE__*/
+  // Waveform icon while active
+  React.createElement("svg", {
+    width: "20",
+    height: "20",
+    viewBox: "0 0 20 20",
+    fill: "none"
+  }, /*#__PURE__*/React.createElement("rect", {
+    x: "2",
+    y: "6",
+    width: "2.5",
+    height: "8",
+    rx: "1.25",
+    fill: "currentColor"
+  }), /*#__PURE__*/React.createElement("rect", {
+    x: "6",
+    y: "3",
+    width: "2.5",
+    height: "14",
+    rx: "1.25",
+    fill: "currentColor"
+  }), /*#__PURE__*/React.createElement("rect", {
+    x: "10",
+    y: "1",
+    width: "2.5",
+    height: "18",
+    rx: "1.25",
+    fill: "currentColor"
+  }), /*#__PURE__*/React.createElement("rect", {
+    x: "14",
+    y: "4",
+    width: "2.5",
+    height: "12",
+    rx: "1.25",
+    fill: "currentColor"
+  }), /*#__PURE__*/React.createElement("rect", {
+    x: "18",
+    y: "7",
+    width: "2.5",
+    height: "6",
+    rx: "1.25",
+    fill: "currentColor",
+    opacity: "0.5"
+  })) :
+  /*#__PURE__*/
+  // Mic icon when idle
+  React.createElement("svg", {
+    width: "18",
+    height: "20",
+    viewBox: "0 0 18 20",
+    fill: "none"
+  }, /*#__PURE__*/React.createElement("rect", {
+    x: "5.5",
+    y: "1",
+    width: "7",
+    height: "11",
+    rx: "3.5",
+    stroke: "currentColor",
+    strokeWidth: "1.8"
+  }), /*#__PURE__*/React.createElement("path", {
+    d: "M2 10c0 3.866 3.134 7 7 7s7-3.134 7-7",
+    stroke: "currentColor",
+    strokeWidth: "1.8",
+    strokeLinecap: "round"
+  }), /*#__PURE__*/React.createElement("line", {
+    x1: "9",
+    y1: "17",
+    x2: "9",
+    y2: "20",
+    stroke: "currentColor",
+    strokeWidth: "1.8",
+    strokeLinecap: "round"
+  })));
+}
+
+// ── CONDENSED MOBILE SCOREBOARD BANNER ──
+function MobileScoreBanner({
+  players,
+  currentPlayer,
+  timerStr,
+  urgent
+}) {
+  return /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 8,
+      padding: '8px 10px',
+      marginBottom: 8,
+      borderRadius: S.radius,
+      background: S.surface2,
+      border: `1px solid ${S.border}`
+    }
+  }, players.map((p, i) => /*#__PURE__*/React.createElement("div", {
+    key: i,
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 5,
+      flex: 1,
+      minWidth: 0,
+      opacity: currentPlayer === i + 1 ? 1 : 0.55
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      width: 6,
+      height: 6,
+      borderRadius: '50%',
+      background: currentPlayer === i + 1 ? S.amber : S.textDim,
+      flexShrink: 0
+    }
+  }), /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: '0.7rem',
+      color: S.textDim,
+      whiteSpace: 'nowrap',
+      overflow: 'hidden',
+      textOverflow: 'ellipsis',
+      maxWidth: 60
+    }
+  }, p.name), /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontFamily: S.fontMono,
+      fontWeight: 700,
+      fontSize: '0.95rem',
+      color: S.text
+    }
+  }, p.score))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontFamily: S.fontMono,
+      fontWeight: 700,
+      fontSize: '0.95rem',
+      color: urgent ? S.red : S.amber,
+      flexShrink: 0,
+      animation: urgent ? 'pulse 0.5s infinite alternate' : 'none'
+    }
+  }, timerStr));
+}
+
+// ── GAME ──
+function GameScreen({
+  config,
+  onEnd
+}) {
+  const {
+    phrase,
+    p1Name,
+    p2Name,
+    totalSecs,
+    mode
+  } = config;
+  const letters = phrase.replace(/\s/g, '').split('');
+  const isMobile = useIsMobile();
+  const [secsLeft, setSecsLeft] = useState(totalSecs);
+  const [tilesVisible, setTilesVisible] = useState(false);
+  const [wordInput, setWordInput] = useState('');
+  const [inputState, setInputState] = useState('idle');
+  const [feedback, setFeedback] = useState({
+    msg: '',
+    type: ''
+  });
+  const [checking, setChecking] = useState(false);
+  const [currentPlayer, setCurrentPlayer] = useState(1);
+  const [players, setPlayers] = useState([{
+    name: p1Name,
+    score: 0,
+    words: []
+  }, {
+    name: p2Name,
+    score: 0,
+    words: []
+  }]);
+  const [p1WordSet] = useState(new Set());
+  const [popup, setPopup] = useState(null);
+  const popupRef = useRef(null);
+  const inputRef = useRef(null);
+  const checkingRef = useRef(false);
+  const timerRef = useRef(null);
+  const feedbackRef = useRef(null);
+  const playersRef = useRef(players);
+  useEffect(() => {
+    playersRef.current = players;
+  }, [players]);
+  useEffect(() => {
+    setTimeout(() => setTilesVisible(true), 80);
+  }, []);
+  useEffect(() => {
+    inputRef.current?.focus();
+  }, []);
+  const startTimer = useCallback(() => {
+    clearInterval(timerRef.current);
+    timerRef.current = setInterval(() => {
+      setSecsLeft(s => {
+        if (s <= 1) {
+          clearInterval(timerRef.current);
+          return 0;
+        }
+        return s - 1;
+      });
+    }, 1000);
+  }, []);
+  useEffect(() => {
+    startTimer();
+    return () => clearInterval(timerRef.current);
+  }, [startTimer]);
+  useEffect(() => {
+    if (secsLeft === 0) {
+      if (mode === 'async' && currentPlayer === 1) {
+        setCurrentPlayer(2);
+        setSecsLeft(totalSecs);
+        showFeedback(`${p1Name} done! ${p2Name}'s turn.`, 'ok');
+        setTimeout(() => startTimer(), 100);
+      } else {
+        clearInterval(timerRef.current);
+        onEnd(playersRef.current);
+      }
+    }
+  }, [secsLeft]);
+  function showFeedback(msg, type) {
+    setFeedback({
+      msg,
+      type
+    });
+    clearTimeout(feedbackRef.current);
+    feedbackRef.current = setTimeout(() => setFeedback({
+      msg: '',
+      type: ''
+    }), 2800);
+  }
+  function restartTimer() {
+    setSecsLeft(totalSecs);
+    startTimer();
+    showFeedback('Timer restarted!', 'ok');
+  }
+  async function submitWord(rawWord) {
+    if (checkingRef.current) return;
+    const word = (rawWord || wordInput).trim().toUpperCase().replace(/[^A-Z]/g, '');
+    setWordInput('');
+    // Defer refocus a tick so iOS doesn't fight the keyboard dismissal that
+    // can follow an Enter keypress / state update on the same input.
+    requestAnimationFrame(() => {
+      inputRef.current?.focus();
+    });
+    if (word.length < 2) {
+      showFeedback('Word must be at least 2 letters.', 'err');
+      flash('err');
+      return;
+    }
+    if (!canMakeWord(word, letters)) {
+      showFeedback(`"${word}" uses letters not in the phrase.`, 'err');
+      flash('err');
+      return;
+    }
+    const cp = currentPlayer - 1;
+    const already = playersRef.current[cp].words.find(w => w.word === word && !w.stolen);
+    if (already) {
+      showFeedback(`You already found "${word}"!`, 'err');
+      flash('err');
+      return;
+    }
+
+    // Show "checking…" while API validates
+    checkingRef.current = true;
+    setChecking(true);
+    showFeedback(`Checking "${word}"…`, 'ok');
+    const valid = await isValidWord(word);
+    checkingRef.current = false;
+    setChecking(false);
+    if (!valid) {
+      showFeedback(`"${word}" isn't a valid English word.`, 'err');
+      flash('err');
+      return;
+    }
+    const pts = wordScore(word);
+    if (mode === 'async' && currentPlayer === 2 && p1WordSet.has(word)) {
+      setPlayers(prev => {
+        const next = [...prev];
+        next[1] = {
+          ...next[1],
+          words: [{
+            word,
+            pts: 0,
+            stolen: true
+          }, ...next[1].words]
+        };
+        return next;
+      });
+      showFeedback(`"${word}" was already found by ${p1Name}!`, 'err');
+      return;
+    }
+    if (mode === 'async' && currentPlayer === 1) p1WordSet.add(word);
+    setPlayers(prev => {
+      const next = [...prev];
+      next[cp] = {
+        ...next[cp],
+        score: next[cp].score + pts,
+        words: [{
+          word,
+          pts,
+          stolen: false
+        }, ...next[cp].words]
+      };
+      return next;
+    });
+    showFeedback(`"${word}" — +${pts} pts!`, 'ok');
+    flash('ok');
+    const tier = wordTier(word, pts);
+    if (tier) {
+      setPopup({
+        word,
+        pts,
+        tier
+      });
+      clearTimeout(popupRef.current);
+      popupRef.current = setTimeout(() => setPopup(null), 1700);
+    }
+  }
+  function flash(type) {
+    setInputState(type);
+    setTimeout(() => setInputState('idle'), 400);
+  }
+  const m = Math.floor(secsLeft / 60);
+  const s = secsLeft % 60;
+  const timerStr = `${m}:${s.toString().padStart(2, '0')}`;
+  const urgent = secsLeft <= 15;
+  const barPct = secsLeft / totalSecs * 100;
+  const barColor = urgent ? S.red : secsLeft <= 30 ? '#e0a020' : S.amber;
+  const inputBorder = inputState === 'ok' ? S.teal : inputState === 'err' ? S.red : S.border;
+  const cpIdx = currentPlayer - 1;
+  const currentWords = players[cpIdx].words;
+  const uniqueLetters = [...new Set(letters)];
+  const tiles = [];
+  let tileIdx = 0;
+  phrase.split(' ').forEach((word, wi, arr) => {
+    word.split('').forEach(ch => {
+      tiles.push(/*#__PURE__*/React.createElement(Tile, {
+        key: tileIdx,
+        ch: ch,
+        idx: tileIdx++,
+        visible: tilesVisible
+      }));
+    });
+    if (wi < arr.length - 1) tiles.push(/*#__PURE__*/React.createElement("div", {
+      key: `sp-${wi}`,
+      style: {
+        width: 8
+      }
+    }));
+  });
+  return /*#__PURE__*/React.createElement("div", {
+    style: {
+      width: '100%',
+      maxWidth: 900
+    }
+  }, /*#__PURE__*/React.createElement(WordPopup, {
+    popup: popup
+  }), isMobile && /*#__PURE__*/React.createElement(MobileScoreBanner, {
+    players: players,
+    currentPlayer: currentPlayer,
+    timerStr: timerStr,
+    urgent: urgent
+  }), mode === 'async' && /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'inline-flex',
+      alignItems: 'center',
+      gap: 7,
+      background: S.amberGlow,
+      border: `1px solid ${S.amberDim}`,
+      borderRadius: 99,
+      padding: '4px 14px',
+      fontSize: '0.78rem',
+      fontWeight: 600,
+      color: S.amber,
+      marginBottom: 14
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      width: 7,
+      height: 7,
+      borderRadius: '50%',
+      background: S.amber,
+      display: 'inline-block',
+      animation: 'blink 1s infinite'
+    }
+  }), players[cpIdx].name, "'s Turn"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'grid',
+      gridTemplateColumns: isMobile ? '1fr' : '1fr 290px',
+      gap: 16
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 14
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      background: S.surface,
+      border: `1px solid ${S.border}`,
+      borderRadius: S.radius + 4,
+      padding: 20,
+      position: isMobile ? 'sticky' : 'static',
+      top: isMobile ? 0 : 'auto',
+      zIndex: isMobile ? 5 : 'auto'
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: '0.7rem',
+      fontWeight: 700,
+      letterSpacing: S.tracking,
+      textTransform: 'uppercase',
+      color: S.textDim,
+      marginBottom: 10,
+      fontFamily: S.font,
+      transition: 'font-family 0.2s'
+    }
+  }, "Source Phrase"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexWrap: 'wrap',
+      gap: 7,
+      marginBottom: 18,
+      minHeight: 50
+    }
+  }, tiles), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 12,
+      marginBottom: 16
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontFamily: S.fontMono,
+      fontSize: '1.9rem',
+      fontWeight: 700,
+      color: urgent ? S.red : S.amber,
+      minWidth: 68,
+      animation: urgent ? 'pulse 0.5s infinite alternate' : 'none'
+    }
+  }, timerStr), /*#__PURE__*/React.createElement("div", {
+    style: {
+      flex: 1,
+      height: 5,
+      background: S.surface2,
+      borderRadius: 99,
+      overflow: 'hidden'
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      height: '100%',
+      width: `${barPct}%`,
+      background: barColor,
+      borderRadius: 99,
+      transition: 'width 1s linear, background 0.3s'
+    }
+  }))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 8,
+      marginBottom: 10
+    }
+  }, /*#__PURE__*/React.createElement("input", {
+    ref: inputRef,
+    value: wordInput,
+    onChange: e => setWordInput(e.target.value.toUpperCase()),
+    onKeyDown: e => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        if (!checking) submitWord();
+      }
+    },
+    placeholder: "TYPE OR SPEAK A WORD…",
+    autoComplete: "off",
+    autoCorrect: "off",
+    autoCapitalize: "characters",
+    enterKeyHint: "go",
+    style: {
+      flex: 1,
+      background: S.surface2,
+      border: `1.5px solid ${inputBorder}`,
+      borderRadius: S.radius,
+      color: S.text,
+      fontFamily: S.fontMono,
+      fontSize: '1.05rem',
+      fontWeight: 700,
+      padding: '10px 14px',
+      letterSpacing: '0.08em',
+      outline: 'none',
+      animation: inputState === 'err' ? 'shake 0.3s' : 'none',
+      transition: 'border-color 0.15s',
+      opacity: checking ? 0.6 : 1
+    }
+  }), /*#__PURE__*/React.createElement(MicButton, {
+    onWord: w => submitWord(w),
+    disabled: checking
+  }), /*#__PURE__*/React.createElement("button", {
+    onClick: () => !checking && submitWord(),
+    disabled: checking,
+    style: {
+      padding: '10px 18px',
+      background: S.amber,
+      border: 'none',
+      borderRadius: S.radius,
+      color: '#0d0f14',
+      fontFamily: S.font,
+      fontWeight: 700,
+      fontSize: '0.9rem',
+      cursor: checking ? 'not-allowed' : 'pointer',
+      opacity: checking ? 0.6 : 1,
+      boxShadow: S.glow,
+      transition: 'font-family 0.2s, border-radius 0.2s, box-shadow 0.3s'
+    }
+  }, S.actionLabel || 'FORGE')), 'webkitSpeechRecognition' in window || 'SpeechRecognition' in window ? /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: '0.72rem',
+      color: S.textDim,
+      marginBottom: 6
+    }
+  }, "🎙 Tap the mic to start — it keeps listening, so just keep saying words. Tap again to stop.") : null, /*#__PURE__*/React.createElement("div", {
+    style: {
+      height: 20,
+      fontSize: '0.82rem',
+      fontWeight: 500,
+      color: feedback.type === 'ok' ? S.teal : S.red
+    }
+  }, feedback.msg)), /*#__PURE__*/React.createElement("div", {
+    style: {
+      background: S.surface,
+      border: `1px solid ${S.border}`,
+      borderRadius: S.radius + 4,
+      padding: 20
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      justifyContent: 'space-between',
+      alignItems: 'center',
+      marginBottom: 12
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: '0.7rem',
+      fontWeight: 700,
+      letterSpacing: S.tracking,
+      textTransform: 'uppercase',
+      color: S.textDim,
+      fontFamily: S.font,
+      transition: 'font-family 0.2s'
+    }
+  }, players[cpIdx].name, "'s Words"), /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontFamily: S.fontMono,
+      color: S.amber,
+      fontWeight: 700,
+      fontSize: '0.9rem'
+    }
+  }, currentWords.filter(w => !w.stolen).length)), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 5,
+      maxHeight: 220,
+      overflowY: 'auto'
+    }
+  }, currentWords.length === 0 ? /*#__PURE__*/React.createElement("div", {
+    style: {
+      color: S.textDim,
+      fontSize: '0.82rem',
+      padding: '6px 0'
+    }
+  }, "No words yet — start typing or speak!") : currentWords.map(({
+    word,
+    pts,
+    stolen
+  }, i) => /*#__PURE__*/React.createElement("div", {
+    key: i,
+    style: {
+      display: 'flex',
+      justifyContent: 'space-between',
+      alignItems: 'center',
+      background: S.surface2,
+      borderRadius: 6,
+      padding: '7px 12px',
+      opacity: stolen ? 0.4 : 1,
+      textDecoration: stolen ? 'line-through' : 'none'
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontFamily: S.fontMono,
+      fontWeight: 700,
+      fontSize: '0.88rem',
+      letterSpacing: '0.05em'
+    }
+  }, word), /*#__PURE__*/React.createElement("span", {
+    style: {
+      color: S.amber,
+      fontWeight: 600,
+      fontSize: '0.8rem'
+    }
+  }, "+", pts)))))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 12
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      background: S.surface,
+      border: `1px solid ${S.border}`,
+      borderRadius: S.radius + 4,
+      padding: 18
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: '0.7rem',
+      fontWeight: 700,
+      letterSpacing: S.tracking,
+      textTransform: 'uppercase',
+      color: S.textDim,
+      marginBottom: 14,
+      fontFamily: S.font,
+      transition: 'font-family 0.2s'
+    }
+  }, "Scoreboard"), players.map((p, i) => /*#__PURE__*/React.createElement("div", {
+    key: i
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      background: S.surface2,
+      borderRadius: 8,
+      padding: '12px 14px',
+      border: `1.5px solid ${currentPlayer === i + 1 ? S.amber : 'transparent'}`,
+      marginBottom: i === 0 ? 8 : 0
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: '0.72rem',
+      fontWeight: 600,
+      color: S.textDim,
+      textTransform: 'uppercase',
+      letterSpacing: S.tracking,
+      marginBottom: 2,
+      fontFamily: S.font,
+      transition: 'font-family 0.2s'
+    }
+  }, p.name), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontFamily: S.fontMono,
+      fontSize: '1.9rem',
+      fontWeight: 700,
+      lineHeight: 1
+    }
+  }, p.score), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: '0.72rem',
+      color: S.textDim,
+      marginTop: 2
+    }
+  }, p.words.filter(w => !w.stolen).length, " words")), i === 0 && /*#__PURE__*/React.createElement("div", {
+    style: {
+      textAlign: 'center',
+      fontSize: '0.68rem',
+      fontWeight: 700,
+      color: S.textDim,
+      letterSpacing: '0.15em',
+      margin: '4px 0'
+    }
+  }, "VS")))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      background: S.surface,
+      border: `1px solid ${S.border}`,
+      borderRadius: S.radius + 4,
+      padding: 18
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: '0.7rem',
+      fontWeight: 700,
+      letterSpacing: S.tracking,
+      textTransform: 'uppercase',
+      color: S.textDim,
+      marginBottom: 10,
+      fontFamily: S.font,
+      transition: 'font-family 0.2s'
+    }
+  }, "Letter Values"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexWrap: 'wrap',
+      gap: 5
+    }
+  }, uniqueLetters.map(ch => /*#__PURE__*/React.createElement("div", {
+    key: ch,
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      alignItems: 'center',
+      background: S.surface2,
+      borderRadius: 5,
+      padding: '4px 7px',
+      minWidth: 30
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontFamily: S.fontMono,
+      fontWeight: 700,
+      fontSize: '0.85rem'
+    }
+  }, ch), /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: '0.58rem',
+      color: S.amber,
+      fontWeight: 700
+    }
+  }, LV[ch] || 0))))), /*#__PURE__*/React.createElement("button", {
+    onClick: restartTimer,
+    style: {
+      width: '100%',
+      padding: '11px 0',
+      borderRadius: S.radius,
+      border: `1px solid ${S.border}`,
+      background: S.surface2,
+      color: S.text,
+      fontFamily: S.font,
+      fontWeight: 600,
+      fontSize: '0.88rem',
+      cursor: 'pointer',
+      transition: 'font-family 0.2s, border-radius 0.2s'
+    }
+  }, "↺ Restart Timer"), /*#__PURE__*/React.createElement("button", {
+    onClick: () => {
+      clearInterval(timerRef.current);
+      onEnd(players);
+    },
+    style: {
+      width: '100%',
+      padding: '11px 0',
+      borderRadius: S.radius,
+      border: `1px solid ${S.border}`,
+      background: S.surface2,
+      color: S.textDim,
+      fontFamily: S.font,
+      fontWeight: 600,
+      fontSize: '0.88rem',
+      cursor: 'pointer',
+      transition: 'font-family 0.2s, border-radius 0.2s'
+    }
+  }, "End Round"))), /*#__PURE__*/React.createElement("style", null, `
+        @keyframes pulse { from{opacity:1} to{opacity:0.45} }
+        @keyframes shake { 0%,100%{transform:translateX(0)} 25%{transform:translateX(-5px)} 75%{transform:translateX(5px)} }
+        @keyframes micPulse { from{box-shadow:0 0 0 0 rgba(245,166,35,0.4)} to{box-shadow:0 0 0 6px rgba(245,166,35,0)} }
+        @keyframes popIn { from { opacity:0; transform: translate(-50%,-50%) scale(0.7); } to { opacity:1; transform: translate(-50%,-50%) scale(1); } }
+        @keyframes popOut { from { opacity:1; } to { opacity:0; transform: translate(-50%,-62%) scale(0.92); } }
+      `));
+}
+
+// ── ONLINE GAME (cross-device, real-time via Firestore) ──
+function OnlineGameScreen({ config, onEnd }) {
+  const { phrase, totalSecs, roomCode, myPlayerNum, maxPlayers, playerNames, duplicateMode = 'exclusive' } = config;
+  const mp = maxPlayers || 2;
+  const names = playerNames || { 1: config.p1Name || 'Player 1', 2: config.p2Name || 'Player 2' };
+  const letters = phrase.replace(/\s/g, '').split('');
+  const isMobile = useIsMobile();
+  const otherNums = [];
+  for (let i = 1; i <= mp; i++) if (i !== myPlayerNum) otherNums.push(i);
+  const myName = names[myPlayerNum] || `Player ${myPlayerNum}`;
+
+  const [secsLeft, setSecsLeft] = useState(totalSecs);
+  const [tilesVisible, setTilesVisible] = useState(false);
+  const [wordInput, setWordInput] = useState('');
+  const [inputState, setInputState] = useState('idle');
+  const [feedback, setFeedback] = useState({ msg: '', type: '' });
+  const [checking, setChecking] = useState(false);
+  const [myScore, setMyScore] = useState(0);
+  const [myWords, setMyWords] = useState([]);
+  const [others, setOthers] = useState(() => {
+    const o = {};
+    otherNums.forEach(n => { o[n] = { name: names[n] || `Player ${n}`, score: 0, words: [] }; });
+    return o;
+  });
+  const [connErr, setConnErr] = useState('');
+  const [popup, setPopup] = useState(null);
+  const [paused, setPaused] = useState(false);
+  const [pauseBusy, setPauseBusy] = useState(false);
+  const [countdown, setCountdown] = useState(START_COUNTDOWN_MS / 1000);
+
+  const popupRef = useRef(null);
+  const inputRef = useRef(null);
+  const checkingRef = useRef(false);
+  const feedbackRef = useRef(null);
+  const myWordsRef = useRef([]);
+  const othersRef = useRef(others);
+  const startTimeMsRef = useRef(null);
+  const tickRef = useRef(null);
+  const endedRef = useRef(false);
+  const hitZeroRef = useRef(false);
+  const pausedRef = useRef(false);
+  const countingDownRef = useRef(true);
+
+  useEffect(() => {
+    setTimeout(() => setTilesVisible(true), 80);
+    inputRef.current?.focus();
+  }, []);
+
+  useEffect(() => {
+    const unsub = listenToRoom(roomCode, data => {
+      const updated = {};
+      otherNums.forEach(n => {
+        const p = data.players ? data.players[String(n)] : null;
+        updated[n] = p ? { name: p.name, score: p.score || 0, words: p.words || [] } : (othersRef.current[n] || { name: names[n] || `Player ${n}`, score: 0, words: [] });
+      });
+      othersRef.current = updated;
+      setOthers(updated);
+      if (data.startTime) {
+        startTimeMsRef.current = data.startTime.toMillis ? data.startTime.toMillis() : Date.now();
+      }
+      pausedRef.current = !!data.paused;
+      setPaused(!!data.paused);
+      if (data.status === 'ended' && !endedRef.current) {
+        endedRef.current = true;
+        clearInterval(tickRef.current);
+        // Scores may still be mid-flight to the server when either side
+        // notices the round ended (clock drift / last-word network lag).
+        // Wait a beat, then pull a fresh, server-confirmed copy of the
+        // doc so everyone locks in on the exact same final tally.
+        setTimeout(async () => {
+          let fd = data;
+          try {
+            const fresh = await db.collection('rooms').doc(roomCode).get({ source: 'server' });
+            if (fresh.exists) fd = fresh.data();
+          } catch (e) { /* fall back to last-known snapshot */ }
+          const fmp = fd.maxPlayers || mp;
+          const finalPlayers = [];
+          for (let i = 1; i <= fmp; i++) {
+            finalPlayers.push((fd.players && fd.players[String(i)]) || { name: names[i] || `Player ${i}`, score: 0, words: [] });
+          }
+          onEnd(finalPlayers);
+        }, 1500);
+      }
+    });
+    return () => unsub();
+  }, []);
+
+  useEffect(() => {
+    tickRef.current = setInterval(() => {
+      if (!startTimeMsRef.current || pausedRef.current) return;
+      // The round timer doesn't truly start at startTime itself — there's a
+      // brief shared countdown first (see START_COUNTDOWN_MS) so the round
+      // never just abruptly drops both players into typing.
+      const trueStart = startTimeMsRef.current + START_COUNTDOWN_MS;
+      const untilStart = trueStart - Date.now();
+      if (untilStart > 0) {
+        countingDownRef.current = true;
+        setCountdown(Math.ceil(untilStart / 1000));
+        return;
+      }
+      if (countingDownRef.current) {
+        countingDownRef.current = false;
+        setCountdown('GO');
+        setTimeout(() => setCountdown(null), 500);
+      }
+      const elapsed = Math.floor((Date.now() - trueStart) / 1000);
+      const left = Math.max(0, totalSecs - elapsed);
+      setSecsLeft(left);
+      if (left === 0 && !hitZeroRef.current) {
+        hitZeroRef.current = true;
+        endRoom(roomCode);
+      }
+    }, 250);
+    return () => clearInterval(tickRef.current);
+  }, []);
+
+  async function togglePause() {
+    setPauseBusy(true);
+    try {
+      if (pausedRef.current) await resumeRoom(roomCode);
+      else await pauseRoom(roomCode);
+    } catch (e) {
+      setConnErr('Could not update pause state — try again.');
+    }
+    setPauseBusy(false);
+  }
+
+  function showFeedback(msg, type) {
+    setFeedback({ msg, type });
+    clearTimeout(feedbackRef.current);
+    feedbackRef.current = setTimeout(() => setFeedback({ msg: '', type: '' }), 2800);
+  }
+  function flash(type) {
+    setInputState(type);
+    setTimeout(() => setInputState('idle'), 400);
+  }
+
+  async function submitWord(rawWord) {
+    if (checkingRef.current) return;
+    if (typeof countdown === 'number' || countdown === 'GO') {
+      showFeedback('Get ready — round starts in a moment!', 'err');
+      return;
+    }
+    if (pausedRef.current) {
+      showFeedback('Game is paused.', 'err');
+      return;
+    }
+    if (endedRef.current || secsLeft <= 0) {
+      showFeedback("Time's up!", 'err');
+      return;
+    }
+    const word = (rawWord || wordInput).trim().toUpperCase().replace(/[^A-Z]/g, '');
+    setWordInput('');
+    requestAnimationFrame(() => inputRef.current?.focus());
+    if (word.length < 2) {
+      showFeedback('Word must be at least 2 letters.', 'err');
+      flash('err');
+      return;
+    }
+    if (!canMakeWord(word, letters)) {
+      showFeedback(`"${word}" uses letters not in the phrase.`, 'err');
+      flash('err');
+      return;
+    }
+    if (myWordsRef.current.find(w => w.word === word)) {
+      showFeedback(`You already found "${word}"!`, 'err');
+      flash('err');
+      return;
+    }
+    let finderName = null;
+    for (const n of otherNums) {
+      const o = othersRef.current[n];
+      if (o && (o.words || []).find(w => w.word === word)) { finderName = o.name; break; }
+    }
+    if (finderName && duplicateMode === 'exclusive') {
+      showFeedback(`${finderName} already found "${word}" — try another!`, 'err');
+      flash('err');
+      return;
+    }
+    checkingRef.current = true;
+    setChecking(true);
+    showFeedback(`Checking "${word}"…`, 'ok');
+    const valid = await isValidWord(word);
+    checkingRef.current = false;
+    setChecking(false);
+    if (!valid) {
+      showFeedback(`"${word}" isn't a valid English word.`, 'err');
+      flash('err');
+      return;
+    }
+    let pts = wordScore(word);
+    if (finderName && duplicateMode === 'half') pts = Math.max(1, Math.floor(pts / 2));
+    const newWords = [{ word, pts, stolen: false }, ...myWordsRef.current];
+    myWordsRef.current = newWords;
+    setMyWords(newWords);
+    setMyScore(prev => {
+      const newScore = prev + pts;
+      submitMyProgress(roomCode, myPlayerNum, newScore, newWords).catch(() => setConnErr('Connection hiccup — retrying on next word.'));
+      return newScore;
+    });
+    showFeedback(finderName ? `"${word}" — +${pts} pts! (${finderName} found it too)` : `"${word}" — +${pts} pts!`, 'ok');
+    flash('ok');
+    const tier = wordTier(word, pts);
+    if (tier) {
+      setPopup({ word, pts, tier });
+      clearTimeout(popupRef.current);
+      popupRef.current = setTimeout(() => setPopup(null), 1700);
+    }
+  }
+
+  const m = Math.floor(secsLeft / 60);
+  const s = secsLeft % 60;
+  const timerStr = `${m}:${s.toString().padStart(2, '0')}`;
+  const urgent = secsLeft <= 15;
+  const barPct = secsLeft / totalSecs * 100;
+  const barColor = urgent ? S.red : secsLeft <= 30 ? '#e0a020' : S.amber;
+  const inputBorder = inputState === 'ok' ? S.teal : inputState === 'err' ? S.red : S.border;
+  const roundLocked = typeof countdown === 'number' || countdown === 'GO';
+  const uniqueLetters = [...new Set(letters)];
+  const tiles = [];
+  let tileIdx = 0;
+  phrase.split(' ').forEach((word, wi, arr) => {
+    word.split('').forEach(ch => {
+      tiles.push(/*#__PURE__*/React.createElement(Tile, { key: tileIdx, ch: ch, idx: tileIdx++, visible: tilesVisible }));
+    });
+    if (wi < arr.length - 1) tiles.push(/*#__PURE__*/React.createElement("div", { key: `sp-${wi}`, style: { width: 8 } }));
+  });
+
+  return /*#__PURE__*/React.createElement("div", { style: { width: '100%', maxWidth: 900 } },
+    /*#__PURE__*/React.createElement(WordPopup, { popup: popup }),
+    countdown !== null && countdown !== undefined && /*#__PURE__*/React.createElement("div", {
+      style: {
+        position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, zIndex: 998,
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        background: 'rgba(13,15,20,0.72)', pointerEvents: 'none'
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontFamily: S.fontMono, fontWeight: 700,
+        fontSize: countdown === 'GO' ? '5.5rem' : '6rem',
+        color: countdown === 'GO' ? S.teal : S.amber,
+        textShadow: S.glow, animation: 'pulse 0.5s infinite alternate'
+      }
+    }, countdown === 'GO' ? 'GO!' : countdown)),
+    /*#__PURE__*/React.createElement("div", { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 10, marginBottom: 14 } },
+      /*#__PURE__*/React.createElement("div", {
+        style: {
+          display: 'inline-flex', alignItems: 'center', gap: 7, background: S.amberGlow,
+          border: `1px solid ${S.amberDim}`, borderRadius: 99, padding: '4px 14px',
+          fontSize: '0.78rem', fontWeight: 600, color: S.amber
+        }
+      }, "🌐 Online · Room ", roomCode, " · ", myName, " vs ", otherNums.map(n => others[n].name).join(', ')),
+      /*#__PURE__*/React.createElement("button", {
+        onClick: togglePause, disabled: pauseBusy,
+        style: {
+          padding: '6px 16px', borderRadius: 99, border: `1px solid ${S.border}`,
+          background: paused ? S.amber : S.surface2, color: paused ? '#0d0f14' : S.text,
+          fontFamily: S.font, fontWeight: 700, fontSize: '0.78rem',
+          cursor: pauseBusy ? 'not-allowed' : 'pointer', opacity: pauseBusy ? 0.6 : 1
+        }
+      }, paused ? '▶ Resume' : '⏸ Pause')
+    ),
+    paused && /*#__PURE__*/React.createElement("div", {
+      style: {
+        background: S.amberGlow, border: `1px solid ${S.amberDim}`, borderRadius: S.radius,
+        padding: '10px 16px', marginBottom: 14, textAlign: 'center', fontWeight: 700,
+        color: S.amber, fontFamily: S.font, letterSpacing: S.tracking
+      }
+    }, "⏸ PAUSED — either player can resume"),
+    connErr && /*#__PURE__*/React.createElement("div", { style: { fontSize: '0.75rem', color: S.red, marginBottom: 10 } }, connErr),
+    /*#__PURE__*/React.createElement("div", { style: { display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 290px', gap: 16 } },
+      /*#__PURE__*/React.createElement("div", { style: { display: 'flex', flexDirection: 'column', gap: 14 } },
+        /*#__PURE__*/React.createElement("div", {
+          style: { background: S.surface, border: `1px solid ${S.border}`, borderRadius: S.radius + 4, padding: 20, position: isMobile ? 'sticky' : 'static', top: isMobile ? 0 : 'auto', zIndex: isMobile ? 5 : 'auto' }
+        },
+          /*#__PURE__*/React.createElement("div", {
+            style: {
+              display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10,
+              background: S.surface2, borderRadius: 8, padding: '8px 12px', marginBottom: 14,
+              fontFamily: S.fontMono, fontWeight: 700, fontSize: '1.05rem'
+            }
+          },
+            /*#__PURE__*/React.createElement("span", { style: { color: S.amber } }, myScore, /*#__PURE__*/React.createElement("span", { style: { fontFamily: S.font, fontWeight: 600, fontSize: '0.68rem', color: S.textDim, marginLeft: 5, textTransform: 'uppercase', letterSpacing: S.tracking } }, myName)),
+            ...otherNums.flatMap(n => ([
+              /*#__PURE__*/React.createElement("span", { key: `vs-${n}`, style: { fontSize: '0.68rem', fontWeight: 700, color: S.textDim, letterSpacing: '0.12em' } }, "VS"),
+              /*#__PURE__*/React.createElement("span", { key: `sc-${n}`, style: { color: S.text, textAlign: 'right' } }, others[n].score, /*#__PURE__*/React.createElement("span", { style: { fontFamily: S.font, fontWeight: 600, fontSize: '0.68rem', color: S.textDim, marginLeft: 5, textTransform: 'uppercase', letterSpacing: S.tracking } }, others[n].name))
+            ]))
+          ),
+          /*#__PURE__*/React.createElement("div", { style: { fontSize: '0.7rem', fontWeight: 700, letterSpacing: S.tracking, textTransform: 'uppercase', color: S.textDim, marginBottom: 10, fontFamily: S.font } }, roundLocked ? "Source Phrase — hidden until start" : "Source Phrase"),
+          /*#__PURE__*/React.createElement("div", { style: { display: 'flex', flexWrap: 'wrap', gap: 7, marginBottom: 18, minHeight: 50, alignItems: 'center' } },
+            roundLocked ? /*#__PURE__*/React.createElement("div", {
+              style: { fontFamily: S.font, fontSize: '0.85rem', color: S.textDim, fontStyle: 'italic' }
+            }, "🔒 Revealed for everyone the instant the round starts…") : tiles
+          ),
+          /*#__PURE__*/React.createElement("div", { style: { display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 } },
+            /*#__PURE__*/React.createElement("div", { style: { fontFamily: S.fontMono, fontSize: '1.9rem', fontWeight: 700, color: urgent ? S.red : S.amber, minWidth: 68, animation: urgent ? 'pulse 0.5s infinite alternate' : 'none' } }, timerStr),
+            /*#__PURE__*/React.createElement("div", { style: { flex: 1, height: 5, background: S.surface2, borderRadius: 99, overflow: 'hidden' } },
+              /*#__PURE__*/React.createElement("div", { style: { height: '100%', width: `${barPct}%`, background: barColor, borderRadius: 99, transition: 'width 1s linear, background 0.3s' } })
+            )
+          ),
+          /*#__PURE__*/React.createElement("div", { style: { display: 'flex', gap: 8, marginBottom: 10 } },
+            /*#__PURE__*/React.createElement("input", {
+              ref: inputRef, value: wordInput, onChange: e => setWordInput(e.target.value.toUpperCase()),
+              onKeyDown: e => { if (e.key === 'Enter') { e.preventDefault(); if (!checking && !paused && !roundLocked) submitWord(); } },
+              placeholder: roundLocked ? "GET READY…" : paused ? "PAUSED…" : "TYPE OR SPEAK A WORD…", autoComplete: "off", autoCorrect: "off", autoCapitalize: "characters", enterKeyHint: "go", disabled: paused || roundLocked,
+              style: { flex: 1, background: S.surface2, border: `1.5px solid ${inputBorder}`, borderRadius: S.radius, color: S.text, fontFamily: S.fontMono, fontSize: '1.05rem', fontWeight: 700, padding: '10px 14px', letterSpacing: '0.08em', outline: 'none', animation: inputState === 'err' ? 'shake 0.3s' : 'none', transition: 'border-color 0.15s', opacity: checking || paused || roundLocked ? 0.6 : 1 }
+            }),
+            /*#__PURE__*/React.createElement(MicButton, { onWord: w => submitWord(w), disabled: checking || paused || roundLocked }),
+            /*#__PURE__*/React.createElement("button", {
+              onClick: () => !checking && !paused && !roundLocked && submitWord(), disabled: checking || paused || roundLocked,
+              style: { padding: '10px 18px', background: S.amber, border: 'none', borderRadius: S.radius, color: '#0d0f14', fontFamily: S.font, fontWeight: 700, fontSize: '0.9rem', cursor: checking || paused || roundLocked ? 'not-allowed' : 'pointer', opacity: checking || paused || roundLocked ? 0.6 : 1, boxShadow: S.glow }
+            }, S.actionLabel || 'FORGE')
+          ),
+          /*#__PURE__*/React.createElement("div", { style: { height: 20, fontSize: '0.82rem', fontWeight: 500, color: feedback.type === 'ok' ? S.teal : S.red } }, feedback.msg)
+        ),
+        /*#__PURE__*/React.createElement("div", { style: { background: S.surface, border: `1px solid ${S.border}`, borderRadius: S.radius + 4, padding: 20 } },
+          /*#__PURE__*/React.createElement("div", { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 } },
+            /*#__PURE__*/React.createElement("span", { style: { fontSize: '0.7rem', fontWeight: 700, letterSpacing: S.tracking, textTransform: 'uppercase', color: S.textDim, fontFamily: S.font } }, "Your Words"),
+            /*#__PURE__*/React.createElement("span", { style: { fontFamily: S.fontMono, color: S.amber, fontWeight: 700, fontSize: '0.9rem' } }, myWords.length)
+          ),
+          /*#__PURE__*/React.createElement("div", { style: { display: 'flex', flexDirection: 'column', gap: 5, maxHeight: 220, overflowY: 'auto' } },
+            myWords.length === 0 ? /*#__PURE__*/React.createElement("div", { style: { color: S.textDim, fontSize: '0.82rem', padding: '6px 0' } }, "No words yet — start typing or speak!") :
+            myWords.map(({ word, pts }, i) => /*#__PURE__*/React.createElement("div", {
+              key: i, style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: S.surface2, borderRadius: 6, padding: '7px 12px' }
+            },
+              /*#__PURE__*/React.createElement("span", { style: { fontFamily: S.fontMono, fontWeight: 700, fontSize: '0.88rem', letterSpacing: '0.05em' } }, word),
+              /*#__PURE__*/React.createElement("span", { style: { color: S.amber, fontWeight: 600, fontSize: '0.8rem' } }, "+", pts)
+            ))
+          )
+        )
+      ),
+      /*#__PURE__*/React.createElement("div", { style: { display: 'flex', flexDirection: 'column', gap: 12 } },
+        /*#__PURE__*/React.createElement("div", { style: { background: S.surface, border: `1px solid ${S.border}`, borderRadius: S.radius + 4, padding: 18 } },
+          /*#__PURE__*/React.createElement("div", { style: { fontSize: '0.7rem', fontWeight: 700, letterSpacing: S.tracking, textTransform: 'uppercase', color: S.textDim, marginBottom: 14, fontFamily: S.font } }, "Scoreboard"),
+          /*#__PURE__*/React.createElement("div", { style: { background: S.surface2, borderRadius: 8, padding: '12px 14px', border: `1.5px solid ${S.amber}`, marginBottom: 8 } },
+            /*#__PURE__*/React.createElement("div", { style: { fontSize: '0.72rem', fontWeight: 600, color: S.textDim, textTransform: 'uppercase', letterSpacing: S.tracking, marginBottom: 2, fontFamily: S.font } }, myName, " (you)"),
+            /*#__PURE__*/React.createElement("div", { style: { fontFamily: S.fontMono, fontSize: '1.9rem', fontWeight: 700, lineHeight: 1 } }, myScore)
+          ),
+          /*#__PURE__*/React.createElement("div", { style: { textAlign: 'center', fontSize: '0.68rem', fontWeight: 700, color: S.textDim, letterSpacing: '0.15em', margin: '4px 0' } }, "VS"),
+          ...otherNums.map((n, idx) => /*#__PURE__*/React.createElement(React.Fragment, { key: n },
+            idx > 0 && /*#__PURE__*/React.createElement("div", { style: { textAlign: 'center', fontSize: '0.68rem', fontWeight: 700, color: S.textDim, letterSpacing: '0.15em', margin: '4px 0' } }, "VS"),
+            /*#__PURE__*/React.createElement("div", { style: { background: S.surface2, borderRadius: 8, padding: '12px 14px', border: '1.5px solid transparent', marginBottom: idx < otherNums.length - 1 ? 0 : 8 } },
+              /*#__PURE__*/React.createElement("div", { style: { fontSize: '0.72rem', fontWeight: 600, color: S.textDim, textTransform: 'uppercase', letterSpacing: S.tracking, marginBottom: 2, fontFamily: S.font } }, others[n].name),
+              /*#__PURE__*/React.createElement("div", { style: { fontFamily: S.fontMono, fontSize: '1.9rem', fontWeight: 700, lineHeight: 1 } }, others[n].score),
+              /*#__PURE__*/React.createElement("div", { style: { fontSize: '0.72rem', color: S.textDim, marginTop: 2 } }, (others[n].words || []).length, " words · live")
+            )
+          ))
+        ),
+        /*#__PURE__*/React.createElement("div", { style: { background: S.surface, border: `1px solid ${S.border}`, borderRadius: S.radius + 4, padding: 18 } },
+          /*#__PURE__*/React.createElement("div", { style: { fontSize: '0.7rem', fontWeight: 700, letterSpacing: S.tracking, textTransform: 'uppercase', color: S.textDim, marginBottom: 10, fontFamily: S.font } }, "Letter Values"),
+          /*#__PURE__*/React.createElement("div", { style: { display: 'flex', flexWrap: 'wrap', gap: 5 } },
+            roundLocked ? /*#__PURE__*/React.createElement("div", {
+              style: { fontFamily: S.font, fontSize: '0.78rem', color: S.textDim, fontStyle: 'italic' }
+            }, "🔒 Hidden until start") :
+            uniqueLetters.map(ch => /*#__PURE__*/React.createElement("div", {
+              key: ch, style: { display: 'flex', flexDirection: 'column', alignItems: 'center', background: S.surface2, borderRadius: 5, padding: '4px 7px', minWidth: 30 }
+            },
+              /*#__PURE__*/React.createElement("span", { style: { fontFamily: S.fontMono, fontWeight: 700, fontSize: '0.85rem' } }, ch),
+              /*#__PURE__*/React.createElement("span", { style: { fontSize: '0.58rem', color: S.amber, fontWeight: 700 } }, LV[ch] || 0)
+            ))
+          )
+        )
+      )
+    )
+  );
+}
+
+// ── SPECTATOR (read-only live board — no inputs, built for a 2nd screen / stream) ──
+function SpectatorScreen({ config }) {
+  const { roomCode } = config;
+  const [room, setRoom] = useState(null);
+  const [secsLeft, setSecsLeft] = useState(null);
+  const [countdown, setCountdown] = useState(START_COUNTDOWN_MS / 1000);
+  const [pulses, setPulses] = useState({});
+
+  const startTimeMsRef = useRef(null);
+  const pausedRef = useRef(false);
+  const tickRef = useRef(null);
+  const countingDownRef = useRef(true);
+  const prevScoresRef = useRef({});
+
+  useEffect(() => {
+    const unsub = listenToRoom(roomCode, data => {
+      setRoom(data);
+      if (data.startTime) {
+        startTimeMsRef.current = data.startTime.toMillis ? data.startTime.toMillis() : Date.now();
+      }
+      pausedRef.current = !!data.paused;
+      const mp = data.maxPlayers || 2;
+      for (let i = 1; i <= mp; i++) {
+        const p = (data.players && data.players[String(i)]) || null;
+        const prevScore = prevScoresRef.current[i] || 0;
+        if (p && (p.score || 0) > prevScore) {
+          prevScoresRef.current[i] = p.score || 0;
+          setPulses(prev => ({ ...prev, [i]: true }));
+          setTimeout(() => setPulses(prev => ({ ...prev, [i]: false })), 600);
+        } else if (p) {
+          prevScoresRef.current[i] = p.score || 0;
+        }
+      }
+    });
+    return () => unsub();
+  }, [roomCode]);
+
+  useEffect(() => {
+    if (!room || room.status !== 'active') return;
+    tickRef.current = setInterval(() => {
+      if (!startTimeMsRef.current || pausedRef.current) return;
+      const trueStart = startTimeMsRef.current + START_COUNTDOWN_MS;
+      const untilStart = trueStart - Date.now();
+      if (untilStart > 0) {
+        countingDownRef.current = true;
+        setCountdown(Math.ceil(untilStart / 1000));
+        return;
+      }
+      if (countingDownRef.current) {
+        countingDownRef.current = false;
+        setCountdown(null);
+      }
+      const elapsed = Math.floor((Date.now() - trueStart) / 1000);
+      const left = Math.max(0, (room.totalSecs || 0) - elapsed);
+      setSecsLeft(left);
+    }, 250);
+    return () => clearInterval(tickRef.current);
+  }, [room && room.status, room && room.totalSecs]);
+
+  if (!room) {
+    return /*#__PURE__*/React.createElement("div", { style: { textAlign: 'center', padding: '60px 20px', color: S.textDim, fontFamily: S.font } }, "Connecting to room ", roomCode, "…");
+  }
+
+  const mp = room.maxPlayers || 2;
+  const palette = [S.amber, S.teal, S.red];
+  const players = [];
+  for (let i = 1; i <= mp; i++) {
+    players.push({
+      num: i,
+      ...((room.players && room.players[String(i)]) || { name: `Player ${i}`, score: 0, words: [] }),
+      color: palette[i - 1] || S.text
+    });
+  }
+  const total = players.reduce((sum, p) => sum + (p.score || 0), 0);
+  const pcts = players.map(p => total > 0 ? Math.round((p.score || 0) / total * 100) : Math.round(100 / mp));
+  const letters = (room.phrase || '').replace(/\s/g, '').split('');
+  const phraseRevealed = room.status === 'ended' || (room.status === 'active' && countdown === null);
+
+  function mmss(s) {
+    if (s == null) return '--:--';
+    const m = Math.floor(s / 60);
+    const sec = s % 60;
+    return `${m}:${String(sec).padStart(2, '0')}`;
+  }
+
+  let statusBanner = null;
+  if (room.status === 'waiting') {
+    statusBanner = 'Waiting for all players to mark ready…';
+  } else if (room.status === 'ended') {
+    const maxScore = Math.max(...players.map(p => p.score || 0));
+    const topPlayers = players.filter(p => (p.score || 0) === maxScore);
+    statusBanner = topPlayers.length > 1 ? "🤝 It's a tie!" : `🏆 ${topPlayers[0].name} wins!`;
+  } else if (room.paused) {
+    statusBanner = '⏸ Paused';
+  } else if (countdown) {
+    statusBanner = `Starting in ${countdown}…`;
+  }
+
+  function PlayerColumn({ player, color, pulse, align }) {
+    return /*#__PURE__*/React.createElement("div", { style: { flex: 1, textAlign: align, minWidth: 0 } },
+      /*#__PURE__*/React.createElement("div", { style: { fontFamily: S.font, fontSize: '1.1rem', fontWeight: 700, color: S.text, marginBottom: 4, letterSpacing: S.tracking, transition: 'font-family 0.2s' } }, player.name || '—'),
+      /*#__PURE__*/React.createElement("div", {
+        style: {
+          fontFamily: S.fontMono, fontSize: pulse ? '3.2rem' : '2.8rem', fontWeight: 700, color: color,
+          transition: 'font-size 0.2s ease-out, text-shadow 0.2s ease-out', textShadow: pulse ? `0 0 24px ${color}` : 'none'
+        }
+      }, player.score || 0),
+      /*#__PURE__*/React.createElement("div", { style: { marginTop: 10, maxHeight: 170, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 4, alignItems: align === 'right' ? 'flex-end' : align === 'center' ? 'center' : 'flex-start' } },
+        (player.words || []).slice(0, 8).map((w, i) => /*#__PURE__*/React.createElement("div", {
+          key: w.word + i,
+          style: { fontFamily: S.fontMono, fontSize: '0.82rem', color: S.textDim, background: S.surface2, border: `1px solid ${S.border}`, borderRadius: 5, padding: '2px 8px' }
+        }, w.word, " +", w.pts))
+      )
+    );
+  }
+
+  return /*#__PURE__*/React.createElement("div", { style: { maxWidth: 900, width: '100%', margin: '20px auto 0', textAlign: 'center' } },
+    /*#__PURE__*/React.createElement("div", { style: { fontSize: '0.78rem', color: S.textDim, marginBottom: 4, letterSpacing: S.tracking, fontFamily: S.font } }, "👁 SPECTATING · ROOM ", roomCode),
+    letters.length > 0 && (phraseRevealed ? /*#__PURE__*/React.createElement("div", {
+      style: { fontFamily: S.fontMono, fontSize: '1.6rem', fontWeight: 700, letterSpacing: '0.25em', color: S.amber, marginBottom: 6 }
+    }, letters.join(' ')) : /*#__PURE__*/React.createElement("div", {
+      style: { fontFamily: S.font, fontSize: '0.95rem', fontStyle: 'italic', color: S.textDim, marginBottom: 6 }
+    }, "🔒 Word hidden until the round starts…")),
+    /*#__PURE__*/React.createElement("div", { style: { fontFamily: S.fontMono, fontSize: '2rem', fontWeight: 700, color: room.paused ? S.red : S.text, marginBottom: 10 } }, mmss(secsLeft)),
+    statusBanner && /*#__PURE__*/React.createElement("div", { style: { fontFamily: S.font, fontSize: '1rem', fontWeight: 700, color: S.amber, marginBottom: 16 } }, statusBanner),
+    /*#__PURE__*/React.createElement("div", { style: { display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 20, padding: '10px 0' } },
+      ...players.flatMap((p, idx) => {
+        const align = mp === 3 ? (idx === 0 ? 'left' : idx === 1 ? 'center' : 'right') : (idx === 0 ? 'left' : 'right');
+        const col = /*#__PURE__*/React.createElement(PlayerColumn, { key: `col-${p.num}`, player: p, color: p.color, pulse: !!pulses[p.num], align: align });
+        if (idx === 0) return [col];
+        return [
+          /*#__PURE__*/React.createElement("div", { key: `vs-${p.num}`, style: { fontFamily: S.font, fontSize: '1.4rem', fontWeight: 700, color: S.textDim, padding: '0 6px', alignSelf: 'center' } }, "VS"),
+          col
+        ];
+      })
+    ),
+    /*#__PURE__*/React.createElement("div", {
+      style: { height: 14, borderRadius: 7, overflow: 'hidden', display: 'flex', marginTop: 14, border: `1px solid ${S.border}`, boxShadow: S.glow }
+    },
+      players.map((p, idx) => /*#__PURE__*/React.createElement("div", { key: p.num, style: { width: `${pcts[idx]}%`, background: p.color, transition: 'width 0.4s ease-out' } }))
+    )
+  );
+}
+
+// ── END ──
+function EndScreen({
+  players,
+  onReset
+}) {
+  const maxScore = Math.max(...players.map(p => p.score || 0));
+  const topPlayers = players.filter(p => (p.score || 0) === maxScore);
+  const tie = topPlayers.length > 1;
+  return /*#__PURE__*/React.createElement("div", {
+    style: {
+      maxWidth: players.length > 2 ? 640 : 480,
+      margin: '60px auto 0',
+      textAlign: 'center',
+      padding: '0 8px'
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: '2.2rem',
+      marginBottom: 4
+    }
+  }, tie ? '🤝' : '👑'), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: '2rem',
+      fontWeight: 700,
+      marginBottom: 6,
+      fontFamily: S.font,
+      letterSpacing: S.tracking
+    }
+  }, tie ? "It's a Tie!" : `${topPlayers[0].name} Wins!`), /*#__PURE__*/React.createElement("div", {
+    style: {
+      color: S.textDim,
+      fontSize: '0.88rem',
+      marginBottom: 28
+    }
+  }, "Round complete"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 12,
+      marginBottom: 28
+    }
+  }, players.map((p, i) => /*#__PURE__*/React.createElement("div", {
+    key: i,
+    style: {
+      flex: 1,
+      background: S.surface,
+      borderRadius: S.radius + 4,
+      padding: '18px 16px',
+      border: `1px solid ${!tie && (p.score || 0) === maxScore ? S.amber : S.border}`
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: '0.72rem',
+      fontWeight: 600,
+      color: S.textDim,
+      textTransform: 'uppercase',
+      letterSpacing: S.tracking,
+      marginBottom: 4,
+      fontFamily: S.font,
+      transition: 'font-family 0.2s'
+    }
+  }, p.name), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontFamily: S.fontMono,
+      fontSize: '2.2rem',
+      fontWeight: 700,
+      color: S.amber
+    }
+  }, p.score), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: '0.75rem',
+      color: S.textDim,
+      marginTop: 2
+    }
+  }, p.words.filter(w => !w.stolen).length, " words"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexWrap: 'wrap',
+      gap: 4,
+      justifyContent: 'center',
+      marginTop: 10
+    }
+  }, p.words.filter(w => !w.stolen).length === 0 ? /*#__PURE__*/React.createElement("span", {
+    style: { fontSize: '0.7rem', color: S.textDim }
+  }, "No words found") : p.words.filter(w => !w.stolen).map((w, wi) => /*#__PURE__*/React.createElement("span", {
+    key: wi,
+    style: {
+      display: 'inline-flex',
+      alignItems: 'center',
+      gap: 3,
+      background: S.surface2,
+      border: `1px solid ${S.border}`,
+      borderRadius: 99,
+      padding: '3px 8px',
+      fontFamily: S.fontMono,
+      fontSize: '0.7rem',
+      fontWeight: 700,
+      letterSpacing: '0.04em'
+    }
+  }, w.word, /*#__PURE__*/React.createElement("span", { style: { color: S.amber, fontWeight: 600 } }, "+", w.pts))))))), /*#__PURE__*/React.createElement("button", {
+    onClick: onReset,
+    style: {
+      width: '100%',
+      padding: '13px 0',
+      borderRadius: S.radius + 1,
+      border: 'none',
+      background: S.amber,
+      color: '#0d0f14',
+      fontFamily: S.font,
+      fontSize: '1rem',
+      fontWeight: 700,
+      cursor: 'pointer',
+      boxShadow: S.glow
+    }
+  }, "Play Again"));
+}
+
+// ── ROOT ──
+function WordForge() {
+  const [screen, setScreen] = useState('setup');
+  const [config, setConfig] = useState(null);
+  const [finalPlayers, setFinalPlayers] = useState(null);
+  const [themeKey, setThemeKey] = useState(() => {
+    try {
+      const saved = localStorage.getItem('wordforge_theme');
+      return saved && THEMES[saved] ? saved : 'ember';
+    } catch (e) {
+      return 'ember';
+    }
+  });
+  applyTheme(themeKey);
+  function changeTheme(key) {
+    setThemeKey(key);
+    try {
+      localStorage.setItem('wordforge_theme', key);
+    } catch (e) {}
+  }
+  return /*#__PURE__*/React.createElement("div", {
+    style: {
+      background: S.bg,
+      backgroundImage: S.texture,
+      backgroundSize: S.textureSize || 'auto',
+      backgroundRepeat: 'repeat',
+      minHeight: '100vh',
+      color: S.text,
+      fontFamily: "'Space Grotesk', sans-serif",
+      display: 'flex',
+      flexDirection: 'column',
+      alignItems: 'center',
+      padding: '0 16px 40px',
+      transition: 'background-color 0.4s'
+    }
+  }, screen !== 'setup' && /*#__PURE__*/React.createElement("div", {
+    style: {
+      width: '100%',
+      maxWidth: 900,
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      padding: '18px 0 14px',
+      borderBottom: `1px solid ${S.border}`,
+      marginBottom: 20
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontFamily: S.font,
+      letterSpacing: S.tracking,
+      fontSize: '1.3rem',
+      fontWeight: 700,
+      transition: 'font-family 0.2s'
+    }
+  }, /*#__PURE__*/React.createElement(LogoMark, null)), /*#__PURE__*/React.createElement("button", {
+    onClick: () => setScreen('setup'),
+    style: {
+      background: 'transparent',
+      border: `1px solid ${S.border}`,
+      borderRadius: S.radius,
+      color: S.textDim,
+      padding: '5px 13px',
+      fontFamily: S.font,
+      fontSize: '0.78rem',
+      cursor: 'pointer'
+    }
+  }, "← New Game")), screen === 'setup' && /*#__PURE__*/React.createElement(SetupScreen, {
+    themeKey: themeKey,
+    onThemeChange: changeTheme,
+    onStart: cfg => {
+      setConfig(cfg);
+      setScreen('game');
+    }
+  }), screen === 'game' && config && (config.mode === 'online' ? /*#__PURE__*/React.createElement(OnlineGameScreen, {
+    key: config.roomCode,
+    config: config,
+    onEnd: p => {
+      setFinalPlayers(p);
+      setScreen('end');
+    }
+  }) : config.mode === 'spectate' ? /*#__PURE__*/React.createElement(SpectatorScreen, {
+    key: config.roomCode,
+    config: config
+  }) : /*#__PURE__*/React.createElement(GameScreen, {
+    key: JSON.stringify(config),
+    config: config,
+    onEnd: p => {
+      setFinalPlayers(p);
+      setScreen('end');
+    }
+  })), screen === 'end' && finalPlayers && /*#__PURE__*/React.createElement(EndScreen, {
+    players: finalPlayers,
+    onReset: () => setScreen('setup')
+  }));
+}
+const root = ReactDOM.createRoot(document.getElementById('root'));
+root.render(/*#__PURE__*/React.createElement(WordForge, null));
+</script>
+</body>
+</html>
