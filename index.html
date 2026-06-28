@@ -77,6 +77,18 @@ async function joinRoom(code, yourName) {
   return code.toUpperCase().trim();
 }
 
+// Read-only existence check used by Spectate mode — confirms a room is
+// real before dropping the viewer into the live board, but never claims
+// a player slot or writes anything.
+async function peekRoom(code) {
+  if (!db) throw new Error('Online mode is unavailable right now.');
+  const clean = code.toUpperCase().trim();
+  const ref = db.collection('rooms').doc(clean);
+  const snap = await ref.get();
+  if (!snap.exists) throw new Error('Room not found. Double-check the code.');
+  return clean;
+}
+
 function listenToRoom(code, cb) {
   if (!db) return () => {};
   return db.collection('rooms').doc(code).onSnapshot(snap => {
@@ -740,6 +752,73 @@ function OnlineSetup({ onStart, initialJoinCode }) {
   );
 }
 
+// ── SPECTATE LOBBY (read-only join — no player slot claimed) ──
+function SpectateSetup({ onStart }) {
+  const [joinCode, setJoinCode] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+
+  const inputStyle = {
+    width: '100%',
+    background: S.surface2,
+    border: `1px solid ${S.border}`,
+    borderRadius: S.radius,
+    color: S.text,
+    fontFamily: S.fontMono,
+    fontSize: '1rem',
+    padding: '10px 14px',
+    outline: 'none'
+  };
+  const labelStyle = {
+    display: 'block',
+    fontSize: '0.75rem',
+    fontWeight: 600,
+    color: S.textDim,
+    letterSpacing: S.tracking,
+    textTransform: 'uppercase',
+    marginBottom: 6,
+    fontFamily: S.font
+  };
+
+  async function doWatch() {
+    if (!joinCode.trim()) {
+      setErr('Enter the room code.');
+      return;
+    }
+    setErr('');
+    setBusy(true);
+    try {
+      const code = await peekRoom(joinCode);
+      onStart({ mode: 'spectate', roomCode: code });
+    } catch (e) {
+      setErr(e.message || 'Could not find that room.');
+    }
+    setBusy(false);
+  }
+
+  return /*#__PURE__*/React.createElement("div", null,
+    /*#__PURE__*/React.createElement("div", { style: { marginBottom: 12, textAlign: 'left' } },
+      /*#__PURE__*/React.createElement("label", { style: labelStyle }, "Room Code"),
+      /*#__PURE__*/React.createElement("input", {
+        value: joinCode,
+        onChange: e => setJoinCode(e.target.value.toUpperCase()),
+        placeholder: "e.g. KX7M",
+        maxLength: 6,
+        onKeyDown: e => e.key === 'Enter' && doWatch(),
+        style: { ...inputStyle, textTransform: 'uppercase', letterSpacing: '0.15em' }
+      })
+    ),
+    /*#__PURE__*/React.createElement("p", { style: { fontSize: '0.78rem', color: S.textDim, marginBottom: 16, lineHeight: 1.5 } },
+      "View-only — pull this up on a separate screen (great for streaming) while two players battle from their own phones. No name or player slot needed."
+    ),
+    err && /*#__PURE__*/React.createElement("p", { style: { color: S.red, fontSize: '0.82rem', marginBottom: 10 } }, err),
+    /*#__PURE__*/React.createElement("button", {
+      onClick: doWatch, disabled: busy,
+      style: { width: '100%', padding: '13px 0', borderRadius: S.radius + 1, border: 'none', background: S.amber, color: '#0d0f14', fontFamily: S.font, fontSize: '0.95rem', fontWeight: 700, cursor: busy ? 'not-allowed' : 'pointer', opacity: busy ? 0.6 : 1 }
+    }, busy ? 'Finding Room…' : '\ud83d\udc41 Watch Room \u2192')
+  );
+}
+
 // ── SETUP ──
 function SetupScreen({
   onStart,
@@ -834,7 +913,7 @@ function SetupScreen({
       marginBottom: 12,
       justifyContent: 'center'
     }
-  }, ['sync', 'async', 'online'].map(m => /*#__PURE__*/React.createElement("button", {
+  }, ['sync', 'async', 'online', 'spectate'].map(m => /*#__PURE__*/React.createElement("button", {
     key: m,
     onClick: () => setMode(m),
     style: {
@@ -849,7 +928,7 @@ function SetupScreen({
       cursor: 'pointer',
       transition: 'font-family 0.2s, border-radius 0.2s'
     }
-  }, m === 'sync' ? '⚡ Sync' : m === 'async' ? '⏱ Async' : '🌐 Online'))), /*#__PURE__*/React.createElement("div", {
+  }, m === 'sync' ? '⚡ Sync' : m === 'async' ? '⏱ Async' : m === 'online' ? '🌐 Online' : '👁 Spectate'))), /*#__PURE__*/React.createElement("div", {
     style: {
       background: S.surface2,
       border: `1px solid ${S.border}`,
@@ -890,7 +969,7 @@ function SetupScreen({
       color: S.textDim,
       lineHeight: 1.5
     }
-  }, "Player 1 goes first with a full timer. When their turn ends, the timer resets to the same amount of time for Player 2. Any word Player 1 already found is locked out and scores zero for Player 2 — so finding words fast matters.")) : /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+  }, "Player 1 goes first with a full timer. When their turn ends, the timer resets to the same amount of time for Player 2. Any word Player 1 already found is locked out and scores zero for Player 2 — so finding words fast matters.")) : mode === 'online' ? /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
     style: {
       fontSize: '0.78rem',
       fontWeight: 700,
@@ -906,10 +985,26 @@ function SetupScreen({
       color: S.textDim,
       lineHeight: 1.5
     }
-  }, "One player creates a room and shares the code. The other joins from their own phone or computer. Both play the same phrase at the same time, and scores sync live between devices."))), /*#__PURE__*/React.createElement(ArenaPicker, {
+  }, "One player creates a room and shares the code. The other joins from their own phone or computer. Both play the same phrase at the same time, and scores sync live between devices.")) : /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: '0.78rem',
+      fontWeight: 700,
+      color: S.amber,
+      marginBottom: 3,
+      fontFamily: S.font,
+      letterSpacing: S.tracking,
+      transition: 'font-family 0.2s'
+    }
+  }, "👁 Watch As A Spectator"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: '0.8rem',
+      color: S.textDim,
+      lineHeight: 1.5
+    }
+  }, "Drop into an Online-mode room with just the room code — no player slot, no name needed. Pull up a big live scoreboard, perfect for a second screen, projector, or stream overlay while two players battle from their phones."))), /*#__PURE__*/React.createElement(ArenaPicker, {
     themeKey: themeKey,
     onChange: onThemeChange
-  }), mode === 'online' ? /*#__PURE__*/React.createElement(OnlineSetup, { onStart: onStart, initialJoinCode: initialJoinCode }) : /*#__PURE__*/React.createElement(React.Fragment, null, [{
+  }), mode === 'online' ? /*#__PURE__*/React.createElement(OnlineSetup, { onStart: onStart, initialJoinCode: initialJoinCode }) : mode === 'spectate' ? /*#__PURE__*/React.createElement(SpectateSetup, { onStart: onStart }) : /*#__PURE__*/React.createElement(React.Fragment, null, [{
     label: 'Source Word / Phrase',
     val: phrase,
     set: setPhrase,
@@ -2186,6 +2281,140 @@ function OnlineGameScreen({ config, onEnd }) {
   );
 }
 
+// ── SPECTATOR (read-only live board — no inputs, built for a 2nd screen / stream) ──
+function SpectatorScreen({ config }) {
+  const { roomCode } = config;
+  const [room, setRoom] = useState(null);
+  const [secsLeft, setSecsLeft] = useState(null);
+  const [countdown, setCountdown] = useState(null);
+  const [pulse1, setPulse1] = useState(false);
+  const [pulse2, setPulse2] = useState(false);
+
+  const startTimeMsRef = useRef(null);
+  const pausedRef = useRef(false);
+  const tickRef = useRef(null);
+  const countingDownRef = useRef(true);
+  const prevP1ScoreRef = useRef(0);
+  const prevP2ScoreRef = useRef(0);
+
+  useEffect(() => {
+    const unsub = listenToRoom(roomCode, data => {
+      setRoom(data);
+      if (data.startTime) {
+        startTimeMsRef.current = data.startTime.toMillis ? data.startTime.toMillis() : Date.now();
+      }
+      pausedRef.current = !!data.paused;
+      const p1 = (data.players && data.players['1']) || null;
+      const p2 = (data.players && data.players['2']) || null;
+      if (p1 && (p1.score || 0) > prevP1ScoreRef.current) {
+        prevP1ScoreRef.current = p1.score || 0;
+        setPulse1(true);
+        setTimeout(() => setPulse1(false), 600);
+      } else if (p1) {
+        prevP1ScoreRef.current = p1.score || 0;
+      }
+      if (p2 && (p2.score || 0) > prevP2ScoreRef.current) {
+        prevP2ScoreRef.current = p2.score || 0;
+        setPulse2(true);
+        setTimeout(() => setPulse2(false), 600);
+      } else if (p2) {
+        prevP2ScoreRef.current = p2.score || 0;
+      }
+    });
+    return () => unsub();
+  }, [roomCode]);
+
+  useEffect(() => {
+    if (!room || room.status !== 'active') return;
+    tickRef.current = setInterval(() => {
+      if (!startTimeMsRef.current || pausedRef.current) return;
+      const trueStart = startTimeMsRef.current + START_COUNTDOWN_MS;
+      const untilStart = trueStart - Date.now();
+      if (untilStart > 0) {
+        countingDownRef.current = true;
+        setCountdown(Math.ceil(untilStart / 1000));
+        return;
+      }
+      if (countingDownRef.current) {
+        countingDownRef.current = false;
+        setCountdown(null);
+      }
+      const elapsed = Math.floor((Date.now() - trueStart) / 1000);
+      const left = Math.max(0, (room.totalSecs || 0) - elapsed);
+      setSecsLeft(left);
+    }, 250);
+    return () => clearInterval(tickRef.current);
+  }, [room && room.status, room && room.totalSecs]);
+
+  if (!room) {
+    return /*#__PURE__*/React.createElement("div", { style: { textAlign: 'center', padding: '60px 20px', color: S.textDim, fontFamily: S.font } }, "Connecting to room ", roomCode, "…");
+  }
+
+  const p1 = (room.players && room.players['1']) || { name: 'Player 1', score: 0, words: [] };
+  const p2 = (room.players && room.players['2']) || { name: 'Player 2', score: 0, words: [] };
+  const total = (p1.score || 0) + (p2.score || 0);
+  const p1Pct = total > 0 ? Math.round((p1.score / total) * 100) : 50;
+  const p2Pct = 100 - p1Pct;
+  const letters = (room.phrase || '').replace(/\s/g, '').split('');
+
+  function mmss(s) {
+    if (s == null) return '--:--';
+    const m = Math.floor(s / 60);
+    const sec = s % 60;
+    return `${m}:${String(sec).padStart(2, '0')}`;
+  }
+
+  let statusBanner = null;
+  if (room.status === 'waiting') {
+    statusBanner = 'Waiting for both players to mark ready…';
+  } else if (room.status === 'ended') {
+    const winner = p1.score === p2.score ? null : (p1.score > p2.score ? p1.name : p2.name);
+    statusBanner = winner ? `🏆 ${winner} wins!` : "🤝 It's a tie!";
+  } else if (room.paused) {
+    statusBanner = '⏸ Paused';
+  } else if (countdown) {
+    statusBanner = `Starting in ${countdown}…`;
+  }
+
+  function PlayerColumn({ player, color, pulse, align }) {
+    return /*#__PURE__*/React.createElement("div", { style: { flex: 1, textAlign: align, minWidth: 0 } },
+      /*#__PURE__*/React.createElement("div", { style: { fontFamily: S.font, fontSize: '1.1rem', fontWeight: 700, color: S.text, marginBottom: 4, letterSpacing: S.tracking, transition: 'font-family 0.2s' } }, player.name || '—'),
+      /*#__PURE__*/React.createElement("div", {
+        style: {
+          fontFamily: S.fontMono, fontSize: pulse ? '3.2rem' : '2.8rem', fontWeight: 700, color: color,
+          transition: 'font-size 0.2s ease-out, text-shadow 0.2s ease-out', textShadow: pulse ? `0 0 24px ${color}` : 'none'
+        }
+      }, player.score || 0),
+      /*#__PURE__*/React.createElement("div", { style: { marginTop: 10, maxHeight: 170, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 4, alignItems: align === 'right' ? 'flex-end' : 'flex-start' } },
+        (player.words || []).slice(0, 8).map((w, i) => /*#__PURE__*/React.createElement("div", {
+          key: w.word + i,
+          style: { fontFamily: S.fontMono, fontSize: '0.82rem', color: S.textDim, background: S.surface2, border: `1px solid ${S.border}`, borderRadius: 5, padding: '2px 8px' }
+        }, w.word, " +", w.pts))
+      )
+    );
+  }
+
+  return /*#__PURE__*/React.createElement("div", { style: { maxWidth: 900, width: '100%', margin: '20px auto 0', textAlign: 'center' } },
+    /*#__PURE__*/React.createElement("div", { style: { fontSize: '0.78rem', color: S.textDim, marginBottom: 4, letterSpacing: S.tracking, fontFamily: S.font } }, "👁 SPECTATING · ROOM ", roomCode),
+    letters.length > 0 && /*#__PURE__*/React.createElement("div", {
+      style: { fontFamily: S.fontMono, fontSize: '1.6rem', fontWeight: 700, letterSpacing: '0.25em', color: S.amber, marginBottom: 6 }
+    }, letters.join(' ')),
+    /*#__PURE__*/React.createElement("div", { style: { fontFamily: S.fontMono, fontSize: '2rem', fontWeight: 700, color: room.paused ? S.red : S.text, marginBottom: 10 } }, mmss(secsLeft)),
+    statusBanner && /*#__PURE__*/React.createElement("div", { style: { fontFamily: S.font, fontSize: '1rem', fontWeight: 700, color: S.amber, marginBottom: 16 } }, statusBanner),
+    /*#__PURE__*/React.createElement("div", { style: { display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 20, padding: '10px 0' } },
+      /*#__PURE__*/React.createElement(PlayerColumn, { player: p1, color: S.amber, pulse: pulse1, align: 'left' }),
+      /*#__PURE__*/React.createElement("div", { style: { fontFamily: S.font, fontSize: '1.4rem', fontWeight: 700, color: S.textDim, padding: '0 6px', alignSelf: 'center' } }, "VS"),
+      /*#__PURE__*/React.createElement(PlayerColumn, { player: p2, color: S.teal, pulse: pulse2, align: 'right' })
+    ),
+    /*#__PURE__*/React.createElement("div", {
+      style: { height: 14, borderRadius: 7, overflow: 'hidden', display: 'flex', marginTop: 14, border: `1px solid ${S.border}`, boxShadow: S.glow }
+    },
+      /*#__PURE__*/React.createElement("div", { style: { width: `${p1Pct}%`, background: S.amber, transition: 'width 0.4s ease-out' } }),
+      /*#__PURE__*/React.createElement("div", { style: { width: `${p2Pct}%`, background: S.teal, transition: 'width 0.4s ease-out' } })
+    )
+  );
+}
+
 // ── END ──
 function EndScreen({
   players,
@@ -2382,6 +2611,9 @@ function WordForge() {
       setFinalPlayers(p);
       setScreen('end');
     }
+  }) : config.mode === 'spectate' ? /*#__PURE__*/React.createElement(SpectatorScreen, {
+    key: config.roomCode,
+    config: config
   }) : /*#__PURE__*/React.createElement(GameScreen, {
     key: JSON.stringify(config),
     config: config,
